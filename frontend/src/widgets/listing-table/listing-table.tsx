@@ -61,17 +61,20 @@ export function ListingTable({ rows }: { rows: ListingRow[] }) {
               </TableCell>
               <TableCell>
                 <div className="font-medium">
-                  {r.rep_article_url ? (
+                  {/* 단지명 → 내부 상세페이지(/complex/{no}). 현재는 Jinja 페이지라
+                      전체 네비게이션(SPA 이탈). 단계4+ 에서 React 라우트로 전환 예정. */}
+                  <a href={`/complex/${r.complex_no}`} className="hover:underline">
+                    {r.complex_name}
+                  </a>
+                  {r.rep_article_url && (
                     <a
                       href={r.rep_article_url}
                       target="_blank"
                       rel="noreferrer"
-                      className="hover:underline"
+                      className="ml-1.5 text-xs font-normal text-muted-foreground hover:text-foreground hover:underline"
                     >
-                      {r.complex_name}
+                      네이버↗
                     </a>
-                  ) : (
-                    r.complex_name
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground">
