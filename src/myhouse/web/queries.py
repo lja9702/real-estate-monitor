@@ -10,7 +10,7 @@ import re
 from calendar import monthrange
 from dataclasses import dataclass, field
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from ..constants import SOURCE_KO, TRADE_TYPE_KO, ListingStatus, TradeType, now_kst
 from ..core.dedup import price_range
@@ -1015,6 +1015,50 @@ def permit_complexes(session: Session) -> list[Complex]:
         return []
     rows = session.exec(select(Complex).where(Complex.complex_no.in_(nos))).all()
     return sorted(rows, key=lambda c: c.name or c.complex_no)
+
+
+@dataclass
+class FilterDomains:
+    price_min: int
+    price_max: int
+    area_min: float
+    area_max: float
+    households_min: int
+    households_max: int
+    year_min: int
+    year_max: int
+    floor_max: int
+
+
+def filter_domains(session: Session) -> FilterDomains:
+    r = session.exec(
+        select(
+            func.min(Listing.price_deal), func.max(Listing.price_deal),
+            func.min(Listing.area_excl), func.max(Listing.area_excl),
+            func.min(Listing.floor_num), func.max(Listing.floor_num),
+        ).where(Listing.status != ListingStatus.REMOVED)
+    ).first()
+    cx = session.exec(
+        select(
+            func.min(Complex.total_households), func.max(Complex.total_households),
+            func.min(Complex.use_approve_ymd), func.max(Complex.use_approve_ymd),
+        )
+    ).first()
+
+    def _year(ymd: str | None) -> int | None:
+        return int(ymd[:4]) if ymd else None
+
+    return FilterDomains(
+        price_min=r[0] or 0,
+        price_max=r[1] or 300000,
+        area_min=r[2] or 0.0,
+        area_max=r[3] or 200.0,
+        households_min=cx[0] or 0,
+        households_max=cx[1] or 5000,
+        year_min=_year(cx[2]) or 1970,
+        year_max=_year(cx[3]) or 2025,
+        floor_max=r[5] or 30,
+    )
 
 
 def permit_address_option_map(session: Session) -> dict[str, list[str]]:

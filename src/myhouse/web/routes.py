@@ -17,6 +17,7 @@ from ..db import repo
 from ..db.engine import get_meta
 from .queries import (
     DealFilters,
+    FilterDomains,
     Filters,
     PermitFilters,
     address_option_map,
@@ -27,6 +28,7 @@ from .queries import (
     complex_stats,
     deal_address_option_map,
     deal_complexes,
+    filter_domains,
     get_map_complexes,
     list_complexes_filtered,
     list_starred_complex_rows,
@@ -327,6 +329,37 @@ def map_data(
 ):
     rows = get_map_complexes(session, _last_run_id(session))
     return [dataclasses.asdict(r) for r in rows]
+
+
+# ── JSON API ──────────────────────────────────────────────────────────────
+
+@router.get("/api/listings")
+def api_listings(
+    filters: Filters = Depends(get_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_area_group_rows(session, filters, _last_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in list_complexes_filtered(session, filters.gu, filters.dong)
+        ],
+        "gu_dong_map": address_option_map(session),
+    }
+
+
+@router.get("/api/filter-domains")
+def api_filter_domains(session: Session = Depends(get_session_dep)):
+    return dataclasses.asdict(filter_domains(session))
+
+
+@router.get("/api/listing/{cluster_key}/history")
+def api_listing_history(cluster_key: str, session: Session = Depends(get_session_dep)):
+    pts = price_history(session, cluster_key)
+    return {"points": [dataclasses.asdict(p) for p in pts], "spark": sparkline(pts)}
 
 
 # ── 지금 수집 ──────────────────────────────────────────────────────────────
