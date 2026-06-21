@@ -29,8 +29,9 @@ export function ListingsPage() {
   const data = listingsQuery.data
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-      <div>
+    <div className="grid gap-6 lg:grid-cols-[320px_1fr] lg:items-start">
+      {/* 좌측 필터 — 스크롤 시 따라오도록 sticky. 패널이 뷰포트보다 길면 내부 스크롤. */}
+      <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
         {domainsQuery.data ? (
           <ListingFilterPanel
             domains={domainsQuery.data}
@@ -47,7 +48,9 @@ export function ListingsPage() {
         )}
       </div>
 
-      <div className="space-y-3">
+      {/* min-w-0: 1fr 트랙이 넓은 테이블 내용폭으로 부풀어 grid 가 가로 오버플로되는 것 방지.
+          넘치면 테이블 내부(overflow-x-auto)에서 스크롤. */}
+      <div className="space-y-3 min-w-0">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span>
             총 <b className="text-foreground">{data?.total ?? 0}</b>건
