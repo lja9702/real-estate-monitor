@@ -98,8 +98,9 @@ def handle_join_attempt(text: str, chat_id: str, engine, join_code: str | None) 
 
 
 def _is_operator(ctx: BotContext) -> bool:
-    """운영자(allowlist) chat 여부 — 운영자는 단지 제한 없이 전체를 보고/받는다."""
-    return bool(ctx.chat_id) and ctx.chat_id in ctx.settings.telegram_allowlist_ids
+    """운영자 판정 — TELEGRAM_CHAT_ID(주 알림 수신자) 우선, 없으면 TELEGRAM_ALLOWLIST 폴백."""
+    op_ids = ctx.settings.telegram_chat_ids or ctx.settings.telegram_allowlist_ids
+    return bool(ctx.chat_id) and ctx.chat_id in op_ids
 
 
 def handle_text(text: str, ctx: BotContext) -> str:
