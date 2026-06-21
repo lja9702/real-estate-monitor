@@ -5,6 +5,8 @@ import { ComplexDetailPage } from '@/pages/complex-detail'
 import { RunsPage } from '@/pages/runs'
 import { ShortlistPage } from '@/pages/shortlist'
 import { ComplexesPage } from '@/pages/complexes'
+import { DealsPage } from '@/pages/deals'
+import { PermitsPage } from '@/pages/permits'
 
 // SPA 는 /app/ 에 마운트되므로 basename 으로 라우터 베이스를 맞춘다(vite base 와 동일).
 export const router = createBrowserRouter(
@@ -18,6 +20,8 @@ export const router = createBrowserRouter(
         { path: 'runs', element: <RunsPage /> },
         { path: 'shortlist', element: <ShortlistPage /> },
         { path: 'complexes', element: <ComplexesPage /> },
+        { path: 'deals', element: <DealsPage /> },
+        { path: 'permits', element: <PermitsPage /> },
       ],
     },
   ],

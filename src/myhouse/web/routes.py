@@ -185,43 +185,13 @@ def shortlist():
 
 
 @router.get("/deals")
-def deals(
-    request: Request,
-    f: DealFilters = Depends(get_deal_filters),
-    session: Session = Depends(get_session_dep),
-):
-    rows = build_deal_rows(session, f, _last_deal_run_id(session))
-    ctx = {
-        "request": request,
-        "rows": rows,
-        "complexes": deal_complexes(session),
-        "gu_dong_map": deal_address_option_map(session),
-        "f": f,
-        "new_count": sum(1 for r in rows if r.is_new),
-        "total": len(rows),
-        "title": "실거래가",
-    }
-    return _tpl(request).TemplateResponse(request, "deals.html", ctx)
+def deals():
+    return RedirectResponse("/app/deals", status_code=302)
 
 
 @router.get("/permits")
-def permits(
-    request: Request,
-    f: PermitFilters = Depends(get_permit_filters),
-    session: Session = Depends(get_session_dep),
-):
-    rows = build_permit_rows(session, f, _last_permit_run_id(session))
-    ctx = {
-        "request": request,
-        "rows": rows,
-        "complexes": permit_complexes(session),
-        "gu_list": sorted(permit_address_option_map(session).keys()),
-        "f": f,
-        "new_count": sum(1 for r in rows if r.is_new),
-        "total": len(rows),
-        "title": "토지거래허가",
-    }
-    return _tpl(request).TemplateResponse(request, "permits.html", ctx)
+def permits():
+    return RedirectResponse("/app/permits", status_code=302)
 
 
 @router.get("/complex/{complex_no}")
@@ -338,6 +308,42 @@ def api_complex_detail(complex_no: str, session: Session = Depends(get_session_d
         "stat": dataclasses.asdict(stat),
         "rows": [dataclasses.asdict(r) for r in rows],
         "deals": [dataclasses.asdict(d) for d in deals],
+    }
+
+
+@router.get("/api/deals")
+def api_deals(
+    f: DealFilters = Depends(get_deal_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_deal_rows(session, f, _last_deal_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in deal_complexes(session)
+        ],
+        "gu_dong_map": deal_address_option_map(session),
+    }
+
+
+@router.get("/api/permits")
+def api_permits(
+    f: PermitFilters = Depends(get_permit_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_permit_rows(session, f, _last_permit_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in permit_complexes(session)
+        ],
+        "gu_list": sorted(permit_address_option_map(session).keys()),
     }
 
 
