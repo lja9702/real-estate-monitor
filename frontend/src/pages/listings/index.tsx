@@ -30,9 +30,9 @@ export function ListingsPage() {
 
   return (
     <div className="space-y-4">
-      {/* 상단 고정 필터 바 — 스크롤해도 늘 보이도록 sticky. -mx-4 로 컨테이너 패딩까지
-          덮어 바처럼 보이게 하고, 반투명 배경으로 아래 내용이 비쳐 보이게. */}
-      <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      {/* 상단 고정 필터 바 — 헤더(h-14) 바로 아래에 sticky 고정. -mx-4 로 컨테이너
+          패딩까지 덮어 바처럼 보이게 하고, 반투명 배경으로 아래 내용이 비쳐 보이게. */}
+      <div className="sticky top-14 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
         {domainsQuery.data ? (
           <ListingFilterPanel
             domains={domainsQuery.data}
