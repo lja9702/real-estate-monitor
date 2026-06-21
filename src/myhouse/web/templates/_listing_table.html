@@ -1,0 +1,59 @@
+{% macro pricecell(row) -%}
+  {%- if row.price_min is none -%}-
+  {%- else -%}
+    {{ row.price_min|manwon }}{% if row.price_max and row.price_max != row.price_min %}~{{ row.price_max|manwon }}{% endif %}
+    {%- if row.trade_ko == "월세" and row.rent_min %} / {{ row.rent_min|manwon }}{% if row.rent_max and row.rent_max != row.rent_min %}~{{ row.rent_max|manwon }}{% endif %}{% endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro floorcell(row) -%}
+  {%- if row.floor_num is not none -%}{{ row.floor_num }}층
+  {%- elif row.floor_info -%}{{ row.floor_info }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro statusbadge(row) -%}
+  {%- if row.is_new %}<span class="badge new">신규</span>{% endif -%}
+  {%- if row.status == "PENDING_REMOVAL" %}<span class="badge pending">미노출</span>
+  {%- elif row.status == "REMOVED" %}<span class="badge removed">거래완료</span>{% endif -%}
+{%- endmacro %}
+
+{% macro listingtable(rows) %}
+<table class="listings">
+  <thead>
+    <tr>
+      <th>★</th><th>단지</th><th>거래</th><th>전용</th><th>층</th><th>향</th>
+      <th>가격(만원)</th><th>중개</th><th>확인일</th><th>상태</th><th>메모</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr class="{{ 'excluded' if row.excluded }} {{ 'is-new' if row.is_new }}" data-ck="{{ row.cluster_key }}">
+      <td><button class="star {{ 'on' if row.starred }}" title="관심 단지" data-cx-star="{{ row.complex_no }}"
+            onclick="toggleStar('{{ row.complex_no }}', this)">{{ '★' if row.starred else '☆' }}</button></td>
+      <td><a href="/complex/{{ row.complex_no }}" class="cx">{{ row.complex_name }}</a>
+          {% if row.dong %}<span class="muted">{{ row.dong }}</span>{% endif %}
+          {% if row.address_short %}<span class="addr-short">{{ row.address_short }}</span>{% endif %}</td>
+      <td><span class="trade {{ row.trade_ko }}">{{ row.trade_ko }}</span></td>
+      <td>{% if row.area_excl %}{{ '%g'|format(row.area_excl) }}㎡{% endif %}</td>
+      <td>{{ floorcell(row) }}</td>
+      <td>{{ row.direction or '' }}</td>
+      <td class="price">{{ pricecell(row) }}</td>
+      <td class="num">{% if row.realtor_count > 1 %}<span class="muted">{{ row.realtor_count }}곳</span>{% endif %}</td>
+      <td class="muted">{{ row.confirm_date[5:] if row.confirm_date else '' }}</td>
+      <td>{{ statusbadge(row) }}</td>
+      <td><input class="memo" value="{{ row.memo or '' }}" placeholder="메모…"
+            onblur="saveMemo('{{ row.cluster_key }}', this)"></td>
+      <td class="actions">
+        <a class="lnk" href="{{ row.article_url }}" target="_blank" rel="noopener">보기</a>
+        <button class="lnk" onclick="showHistory('{{ row.cluster_key }}')">이력</button>
+        <button class="lnk excl" title="제외/복원"
+            onclick="toggleExclude('{{ row.cluster_key }}', this)">{{ '복원' if row.excluded else '제외' }}</button>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="12" class="empty">매물이 없습니다. 우측 상단 <b>지금 수집</b> 으로 수집하거나 필터를 조정하세요.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

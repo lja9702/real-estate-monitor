@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 텔레그램 봇 상시 데몬(롱폴링). install_launchd.sh 가 __PLACEHOLDER__ 를 치환한다.
+     KeepAlive 로 크래시/네트워크 끊김 시 자동 재기동한다. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL_PREFIX__.bot</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string>
+    <string>myhouse.cli</string>
+    <string>bot</string>
+    <string>--config</string>
+    <string>__CONFIG__</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- 재기동 폭주 방지: 비정상 종료 시 최소 10초 간격 -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TZ</key>
+    <string>Asia/Seoul</string>
+    <key>PATH</key>
+    <string>__VENV_BIN__:/usr/bin:/bin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/bot.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/bot.err</string>
+</dict>
+</plist>

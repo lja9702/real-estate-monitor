@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% from "_deal_table.html" import dealtable %}
+{% block content %}
+
+<script>
+const GU_DONG = {{ gu_dong_map | tojson }};
+function onGuChange() {
+  const gu = document.querySelector('[name=gu]').value;
+  const sel = document.querySelector('[name=dong]');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">동 전체</option>';
+  (GU_DONG[gu] || []).forEach(d => {
+    const o = document.createElement('option');
+    o.value = d; o.textContent = d;
+    if (d === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+  document.querySelector('.filters').submit();
+}
+</script>
+
+<form class="filters" method="get" action="/deals">
+  <select name="gu" onchange="onGuChange()">
+    <option value="">구 전체</option>
+    {% for gu in gu_dong_map %}
+      <option value="{{ gu }}" {{ 'selected' if f.gu == gu }}>{{ gu }}</option>
+    {% endfor %}
+  </select>
+  <select name="dong" onchange="this.form.submit()">
+    <option value="">동 전체</option>
+    {% for dong in (gu_dong_map.get(f.gu, []) if f.gu else gu_dong_map.values() | sum(start=[])) %}
+      <option value="{{ dong }}" {{ 'selected' if f.dong == dong }}>{{ dong }}</option>
+    {% endfor %}
+  </select>
+  <select name="complex_no" onchange="this.form.submit()">
+    <option value="">단지 전체</option>
+    {% for c in complexes %}
+      <option value="{{ c.complex_no }}" {{ 'selected' if f.complex_no == c.complex_no }}>{{ c.name or c.complex_no }}</option>
+    {% endfor %}
+  </select>
+  <select name="trade_type" onchange="this.form.submit()">
+    <option value="">거래 전체</option>
+    <option value="SALE" {{ 'selected' if f.trade_type == 'SALE' }}>매매</option>
+    <option value="JEONSE" {{ 'selected' if f.trade_type == 'JEONSE' }}>전세</option>
+    <option value="WOLSE" {{ 'selected' if f.trade_type == 'WOLSE' }}>월세</option>
+  </select>
+  <select name="months" onchange="this.form.submit()">
+    {% for v, lbl in [(3,'최근 3개월'),(6,'최근 6개월'),(12,'최근 1년'),(24,'최근 2년'),(36,'최근 3년')] %}
+      <option value="{{ v }}" {{ 'selected' if f.months == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input name="area_min" value="{{ f.area_min or '' }}" placeholder="전용↓㎡" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="area_max" value="{{ f.area_max or '' }}" placeholder="전용↑㎡" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="households_min" value="{{ f.households_min or '' }}" placeholder="세대수↓" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="households_max" value="{{ f.households_max or '' }}" placeholder="세대수↑" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_min" value="{{ f.year_min or '' }}" placeholder="준공↓(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_max" value="{{ f.year_max or '' }}" placeholder="준공↑(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="q" value="{{ f.q or '' }}" placeholder="검색(단지/평형)" onchange="this.form.submit()">
+  <select name="sort" onchange="this.form.submit()">
+    {% for v, lbl in [('date_desc','거래일↓'),('price_desc','가격↓'),('price_asc','가격↑')] %}
+      <option value="{{ v }}" {{ 'selected' if f.sort == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <label class="chk"><input type="checkbox" name="include_cancelled" {{ 'checked' if f.include_cancelled }} onchange="this.form.submit()"> 취소포함</label>
+  <a class="btn ghost" href="/deals">초기화</a>
+</form>
+
+<div class="summary">총 <b>{{ total }}</b>건 · 신규 <b>{{ new_count }}</b>건 <span class="muted">(국토부 실거래 · 네이버 경유)</span></div>
+
+{{ dealtable(rows) }}
+{% endblock %}

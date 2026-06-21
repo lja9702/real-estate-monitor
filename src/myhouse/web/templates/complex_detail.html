@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_listing_table.html" import listingtable %}
+{% from "_deal_table.html" import dealtable %}
+{% block content %}
+<h1>
+  <button class="star {{ 'on' if stat.starred }}" title="관심 단지" data-cx-star="{{ stat.complex_no }}"
+      onclick="toggleStar('{{ stat.complex_no }}', this)">{{ '★' if stat.starred else '☆' }}</button>
+  {{ stat.name }} <span class="muted">#{{ stat.complex_no }}</span>
+</h1>
+{% if stat.meta_line %}<p class="summary">{{ stat.meta_line }}</p>{% endif %}
+<div class="stats">
+  <div class="stat"><span>거래중</span><b>{{ stat.active_count }}</b></div>
+  {% for ko, n in stat.by_trade.items() %}
+    <div class="stat"><span>{{ ko }}</span><b>{{ n }}</b></div>
+  {% endfor %}
+  <div class="stat"><span>최저가</span><b>{{ stat.price_min|manwon }}</b></div>
+  <div class="stat"><span>최고가</span><b>{{ stat.price_max|manwon }}</b></div>
+</div>
+<p><a class="btn ghost" href="/?complex_no={{ stat.complex_no }}">이 단지로 필터</a></p>
+
+<h2 class="section-title">매물 (호가)</h2>
+{{ listingtable(rows) }}
+
+<h2 class="section-title">실거래가 <span class="muted">최근 2년 · 국토부</span></h2>
+{{ dealtable(deal_rows, show_complex=false) }}
+{% endblock %}

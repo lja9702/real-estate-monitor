@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+
+<form class="filters" method="get" action="/permits">
+  <select name="gu" onchange="this.form.submit()">
+    <option value="">구 전체</option>
+    {% for gu in gu_list %}
+      <option value="{{ gu }}" {{ 'selected' if f.gu == gu }}>{{ gu }}</option>
+    {% endfor %}
+  </select>
+  <select name="complex_no" onchange="this.form.submit()">
+    <option value="">단지 전체</option>
+    {% for c in complexes %}
+      <option value="{{ c.complex_no }}" {{ 'selected' if f.complex_no == c.complex_no }}>{{ c.name or c.complex_no }}</option>
+    {% endfor %}
+  </select>
+  <select name="job_gbn" onchange="this.form.submit()">
+    <option value="">처리구분 전체</option>
+    {% for v, lbl in [('허가','허가'),('취소','취소'),('불허가','불허가'),('취하','취하'),('반려','반려')] %}
+      <option value="{{ v }}" {{ 'selected' if f.job_gbn == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <select name="months" onchange="this.form.submit()">
+    {% for v, lbl in [(1,'최근 1개월'),(3,'최근 3개월'),(6,'최근 6개월'),(12,'최근 1년')] %}
+      <option value="{{ v }}" {{ 'selected' if f.months == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input name="households_min" value="{{ f.households_min or '' }}" placeholder="세대수↓" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="households_max" value="{{ f.households_max or '' }}" placeholder="세대수↑" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_min" value="{{ f.year_min or '' }}" placeholder="준공↓(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_max" value="{{ f.year_max or '' }}" placeholder="준공↑(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="q" value="{{ f.q or '' }}" placeholder="검색(단지/지번)" onchange="this.form.submit()">
+  <select name="sort" onchange="this.form.submit()">
+    {% for v, lbl in [('date_desc','허가일↓'),('date_asc','허가일↑')] %}
+      <option value="{{ v }}" {{ 'selected' if f.sort == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <a class="btn ghost" href="/permits">초기화</a>
+</form>
+
+<div class="summary">
+  총 <b>{{ total }}</b>건 · 신규 <b>{{ new_count }}</b>건
+  <span class="muted">(서울시 토지거래허가 · land.seoul.go.kr 경유)</span>
+  <span class="muted"> — 허가는 거래 성사 전 단계 신호 · 가격은 실거래로 확인하세요</span>
+</div>
+
+<table class="listings deals">
+  <thead>
+    <tr>
+      <th>단지</th><th>허가일</th><th>처리구분</th><th>이용목적</th><th>지번</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr class="{{ 'is-new' if row.is_new }}">
+      <td>
+        <a href="/complex/{{ row.complex_no }}" class="cx">
+          {% if row.starred %}★ {% endif %}{{ row.complex_name }}
+        </a>
+        {% if row.address_short %}<span class="addr-short">{{ row.address_short }}</span>{% endif %}
+        {% if row.meta_line %}<span class="addr-short">{{ row.meta_line }}</span>{% endif %}
+      </td>
+      <td class="muted">{{ row.permit_date or '-' }}</td>
+      <td>
+        <span class="trade {{ '허가' if row.job_gbn == '허가' else '취소' if row.job_gbn and '취소' in row.job_gbn else '' }}">
+          {{ row.job_gbn or '-' }}
+        </span>
+      </td>
+      <td>{{ row.use_purp or '-' }}</td>
+      <td class="muted">{{ row.address.split()[-1] if row.address else '-' }}</td>
+      <td>{% if row.is_new %}<span class="badge new">신규</span>{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="empty">
+      토지거래허가 내역이 없습니다.
+      우측 상단 <b>허가 수집</b> 버튼을 누르거나, 필터를 조정하세요.<br>
+      <span class="muted">※ 서울 토지거래허가구역(강남3구·용산 등) 추적 단지가 있어야 조회됩니다.</span>
+    </td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

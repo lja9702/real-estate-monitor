@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 실거래 수집기: 하루 1회(매물 수집 이후). 시간 변경은 StartCalendarInterval 수정 후 재설치.
+     install_launchd.sh 가 __PLACEHOLDER__ 를 치환한다. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL_PREFIX__.deals</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string>
+    <string>myhouse.cli</string>
+    <string>collect-deals</string>
+    <string>--config</string>
+    <string>__CONFIG__</string>
+    <string>--trigger</string>
+    <string>scheduled</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT__</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>__DEALS_HOUR__</integer>
+    <key>Minute</key><integer>__DEALS_MINUTE__</integer>
+  </dict>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TZ</key>
+    <string>Asia/Seoul</string>
+    <key>PATH</key>
+    <string>__VENV_BIN__:/usr/bin:/bin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/deals.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/deals.err</string>
+</dict>
+</plist>

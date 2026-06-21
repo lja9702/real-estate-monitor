@@ -1,0 +1,771 @@
+"""myhouse CLI (Typer) — initdb / collect / collect-deals / test-notify / probe / serve / bot / backup-db."""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+from pathlib import Path
+
+import typer
+
+from .constants import now_kst
+from .db.engine import init_db, make_engine
+from .logging_conf import mask_secret, setup_logging
+from .settings import Config, Settings, load_config
+
+app = typer.Typer(add_completion=False, help="네이버부동산 매물 모니터")
+log = logging.getLogger("myhouse.cli")
+
+
+def _load(config_path: str) -> tuple[Config, Settings]:
+    setup_logging()
+    config = load_config(config_path)
+    settings = Settings(_env_file=config.app.env_file)
+    return config, settings
+
+
+def _html_to_text(html: str) -> str:
+    """콘솔 미리보기용 — 링크 태그를 'text(url)' 로, 나머지 태그 제거."""
+    html = re.sub(r'<a href="([^"]+)">([^<]+)</a>', r"\2(\1)", html)
+    return re.sub(r"<[^>]+>", "", html)
+
+
+@app.command()
+def initdb(config: str = typer.Option("config.yaml", help="설정 파일 경로")) -> None:
+    """DB 테이블 생성(존재 시 무시)."""
+    cfg, _ = _load(config)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+    typer.echo(f"✅ DB 초기화 완료: {Path(cfg.app.db_path).resolve()}")
+
+
+def _preview_personalized(engine, settings, build_for) -> None:
+    """구독자별로 받게 될 다이제스트를 터미널에 출력(dry-run — 발송하지 않음).
+
+    발송과 동일한 telegram.build_personalized 로직을 타므로, 운영자=전체·일반=공통∪본인구독이
+    실제 발송 전에 그대로 검증된다.
+    """
+    from .notify import telegram
+
+    plans = telegram.build_personalized(engine, settings, build_for)
+    typer.echo("----- 구독자별 미리보기(dry-run) -----")
+    if not plans:
+        typer.echo("(보낼 구독자 없음 — 변동이 각자 밴드·단지 밖)")
+    for chat_id, text in plans:
+        typer.echo(f"\n[{chat_id}]")
+        typer.echo(_html_to_text(text))
+    typer.echo("------------------------------------\n")
+
+
+@app.command()
+def collect(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    trigger: str = typer.Option("manual", help="scheduled | manual"),
+) -> None:
+    """매물 1회 수집 → diff → (변화 시) 텔레그램 알림."""
+    from .core.collector import CollectorLocked, RunResult, run_collection
+    from .notify import telegram
+    from .notify.digest import build_digest
+
+    cfg, settings = _load(config)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        log.warning("텔레그램 미설정(.env) — 알림 없이 수집만 합니다.")
+
+    def _notify(result: RunResult) -> None:
+        full = build_digest(result, cfg.app.dashboard_url)  # 전체(밴드무관) — 미리보기/하트비트
+        typer.echo("\n----- 다이제스트 미리보기(전체) -----")
+        typer.echo(_html_to_text(full or ""))
+        typer.echo("------------------------------------\n")
+        _preview_personalized(
+            engine,
+            settings,
+            lambda lo, hi, only: build_digest(
+                result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
+                only_complexes=only, drop_empty=True,
+            ),
+        )
+        if notifier is None:
+            return
+        if result.total_changes == 0:  # 하트비트: 거를 변동이 없으니 전체에 그대로
+            telegram.broadcast(notifier, engine, full)
+            typer.echo("📨 텔레그램 전송 완료(전체)")
+        else:
+            sent = telegram.broadcast_personalized(
+                notifier,
+                engine,
+                settings,
+                lambda lo, hi, only: build_digest(
+                    result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
+                    only_complexes=only, drop_empty=True,
+                ),
+            )
+            typer.echo(f"📨 텔레그램 전송 완료({sent}명 — 가격밴드·단지별)")
+
+    try:
+        result = run_collection(cfg, settings, engine, trigger=trigger, notify=_notify)
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    finally:
+        if notifier is not None:
+            notifier.close()
+
+    typer.echo(
+        f"완료: 상태={result.status.value} · 타겟 {result.targets_count} · "
+        f"수집 {result.articles_fetched} · 신규 {result.new_count} · "
+        f"가격변동 {result.price_changed_count} · 거래완료 {result.removed_count} · "
+        f"오류 {result.http_errors}"
+    )
+
+
+@app.command(name="collect-deals")
+def collect_deals(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    trigger: str = typer.Option("manual", help="scheduled | manual"),
+) -> None:
+    """실거래(국토부) 1회 수집 → diff(신규/취소) → (변화 시) 텔레그램 알림."""
+    from .core.deal_collector import CollectorLocked, DealRunResult, run_deal_collection
+    from .notify import telegram
+    from .notify.deal_digest import build_deal_digest
+
+    cfg, settings = _load(config)
+    if not cfg.deals.enabled:
+        typer.secho("⏸ 실거래 수집 비활성화 (config: deals.enabled=false)", fg="yellow")
+        raise typer.Exit(code=0)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        log.warning("텔레그램 미설정(.env) — 알림 없이 수집만 합니다.")
+
+    def _notify(result: DealRunResult) -> None:
+        full = build_deal_digest(result, cfg.app.dashboard_url)
+        typer.echo("\n----- 실거래 다이제스트 미리보기(전체) -----")
+        typer.echo(_html_to_text(full or ""))
+        typer.echo("------------------------------------------\n")
+        _preview_personalized(
+            engine,
+            settings,
+            lambda lo, hi, only: build_deal_digest(
+                result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
+                only_complexes=only, drop_empty=True,
+            ),
+        )
+        if notifier is None:
+            return
+        if result.total_changes == 0:
+            telegram.broadcast(notifier, engine, full)
+            typer.echo("📨 텔레그램 전송 완료(전체)")
+        else:
+            sent = telegram.broadcast_personalized(
+                notifier,
+                engine,
+                settings,
+                lambda lo, hi, only: build_deal_digest(
+                    result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
+                    only_complexes=only, drop_empty=True,
+                ),
+            )
+            typer.echo(f"📨 텔레그램 전송 완료({sent}명 — 가격밴드·단지별)")
+
+    try:
+        result = run_deal_collection(cfg, settings, engine, trigger=trigger, notify=_notify)
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    finally:
+        if notifier is not None:
+            notifier.close()
+
+    typer.echo(
+        f"완료: 상태={result.status.value} · 타겟 {result.targets_count} · "
+        f"신규 {result.new_count} · 취소 {result.cancelled_count} · 오류 {result.errors}"
+    )
+
+
+@app.command(name="collect-permits")
+def collect_permits(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    trigger: str = typer.Option("manual", help="scheduled | manual"),
+) -> None:
+    """토지거래허가(서울시) 1회 수집 → diff(신규 허가) → (변화 시) 텔레그램 알림."""
+    from .core.collector import CollectorLocked
+    from .core.permit_collector import PermitRunResult, run_permit_collection
+    from .notify import telegram
+    from .notify.permit_digest import build_permit_digest
+
+    cfg, settings = _load(config)
+    if not cfg.permits.enabled:
+        typer.secho("⏸ 토지거래허가 수집 비활성화 (config: permits.enabled=false)", fg="yellow")
+        raise typer.Exit(code=0)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        log.warning("텔레그램 미설정(.env) — 알림 없이 수집만 합니다.")
+
+    def _notify(result: PermitRunResult) -> None:
+        msg = build_permit_digest(result, cfg.app.dashboard_url)
+        typer.echo("\n----- 토지거래허가 다이제스트 미리보기 -----")
+        typer.echo(_html_to_text(msg))
+        typer.echo("--------------------------------------------\n")
+        if notifier is not None:
+            telegram.broadcast(notifier, engine, msg)
+            typer.echo("📨 텔레그램 전송 완료")
+
+    try:
+        result = run_permit_collection(cfg, settings, engine, trigger=trigger, notify=_notify)
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    finally:
+        if notifier is not None:
+            notifier.close()
+
+    typer.echo(
+        f"완료: 상태={result.status.value} · 단지 {result.targets_count} · "
+        f"자치구 {result.sgg_count} · 신규 허가 {result.new_count} · "
+        f"지번미보유 {result.missing_jibun} · 오류 {result.errors}"
+    )
+
+
+@app.command()
+def discover(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    trigger: str = typer.Option("manual", help="scheduled | manual"),
+) -> None:
+    """주간 신규편입 단지 탐색 1회 (single-markers) → (신규 발견 시) 텔레그램 알림."""
+    from .core.discover import CollectorLocked, DiscoverResult, run_discovery
+    from .notify import telegram
+    from .notify.discover_digest import build_discover_digest
+
+    cfg, settings = _load(config)
+    if not cfg.discover.enabled:
+        typer.secho("⏸ 주간 탐색 비활성화 (config: discover.enabled=false)", fg="yellow")
+        raise typer.Exit(code=0)
+    if not cfg.discover.regions:
+        typer.secho("⚠ 탐색 지역(discover.regions)이 없습니다.", fg="yellow")
+        raise typer.Exit(code=0)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        log.warning("텔레그램 미설정(.env) — 알림 없이 탐색만 합니다.")
+
+    def _notify(result: DiscoverResult) -> None:
+        full = build_discover_digest(result, cfg.app.dashboard_url)
+        typer.echo("\n----- 신규편입 다이제스트 미리보기(전체) -----")
+        typer.echo(_html_to_text(full or ""))
+        typer.echo("--------------------------------------------\n")
+        if notifier is None:
+            return
+        if not result.new_candidates:
+            telegram.broadcast(notifier, engine, full)
+            typer.echo("📨 텔레그램 전송 완료(전체)")
+        else:
+            sent = telegram.broadcast_personalized(
+                notifier,
+                engine,
+                lambda lo, hi: build_discover_digest(
+                    result, cfg.app.dashboard_url, price_min=lo, price_max=hi, drop_empty=True
+                ),
+            )
+            typer.echo(f"📨 텔레그램 전송 완료({sent}명 — 가격밴드별)")
+
+    try:
+        result = run_discovery(cfg, settings, engine, trigger=trigger, notify=_notify)
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    finally:
+        if notifier is not None:
+            notifier.close()
+
+    if result.first_run:
+        typer.echo(
+            f"✅ baseline 확립: 후보 {result.total_found}개 기록(알림 없음). "
+            "다음 회차부터 신규 편입분을 알립니다."
+        )
+    else:
+        typer.echo(
+            f"완료: 상태={result.status.value} · 지역 {len(result.regions)} · "
+            f"편입 {result.total_found} · 신규 {len(result.new_candidates)} · "
+            f"오류지역 {result.errors}"
+        )
+
+
+@app.command(name="add-complex")
+def add_complex_cmd(
+    complex_no: str = typer.Argument(..., help="네이버 단지번호"),
+    alias: str = typer.Option("", help="단지 별칭(표시 이름)"),
+    source: str = typer.Option("web", help="출처 태그: web | telegram"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+) -> None:
+    """단지를 추적 목록에 추가하고 즉시 1회 매물 수집. 대시보드 '추적 추가'가 백그라운드로 호출한다."""
+    from .core.collector import CollectorLocked
+    from .core.on_demand import add_complex, track_complex
+    from .naver.client import NaverLandClient
+
+    if not complex_no.isdigit():
+        typer.secho(f"❌ 단지번호는 숫자여야 합니다: {complex_no}", fg="red")
+        raise typer.Exit(code=1)
+
+    cfg, settings = _load(config)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+
+    # 1) 등록(락·네트워크 무관, 항상 성공) → 2) 즉시 수집 시도(정기 수집 중이면 건너뜀)
+    nick = alias.strip() or None
+    track_complex(cfg, engine, complex_no, alias=nick, source=source)
+    typer.echo(f"🌐 단지 {complex_no} 추가 완료 — 첫 매물 수집 중…")
+    try:
+        with NaverLandClient(
+            request_delay_seconds=cfg.app.request_delay_seconds, headless=cfg.app.headless
+        ) as client:
+            result = add_complex(
+                cfg, settings, engine, complex_no, alias=nick, client=client, source=source
+            )
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 추적 등록은 완료, 수집은 다음 기회에.", fg="yellow")
+        raise typer.Exit(code=0) from None
+
+    r = result.run
+    typer.echo(
+        f"✅ {result.name}({result.complex_no}) · 상태={r.status.value} · "
+        f"수집 {r.articles_fetched} · 신규 {r.new_count}"
+    )
+
+
+@app.command(name="test-notify")
+def test_notify(config: str = typer.Option("config.yaml", help="설정 파일 경로")) -> None:
+    """텔레그램 채널 연결 테스트 메시지 전송."""
+    cfg, settings = _load(config)
+    from .notify import telegram
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        typer.secho(
+            "❌ 텔레그램 미설정 — .env 에 TELEGRAM_BOT_TOKEN 을 넣으세요.",
+            fg="red",
+        )
+        raise typer.Exit(code=1)
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+    from .db.engine import get_session
+    from .db.repo import get_active_subscriber_ids
+
+    with get_session(engine) as session:
+        ids = get_active_subscriber_ids(session)
+    if not ids:
+        typer.secho("⚠ 구독자가 없습니다. 봇에게 메시지를 보내 먼저 구독하세요.", fg="yellow")
+        raise typer.Exit(code=0)
+    log.info("토큰=%s 구독자 %d명에게 전송", mask_secret(settings.telegram_bot_token), len(ids))
+    telegram.broadcast(notifier, engine, "🏠 <b>myhouse</b> 텔레그램 연결 테스트 — 정상 수신되면 설정 완료입니다.")
+    notifier.close()
+    typer.echo(f"✅ 전송 완료({len(ids)}명) — 텔레그램을 확인하세요.")
+
+
+@app.command(name="setup-commands")
+def setup_commands(config: str = typer.Option("config.yaml", help="설정 파일 경로")) -> None:
+    """텔레그램 봇 명령 자동완성 메뉴를 등록한다 (setMyCommands)."""
+    _, settings = _load(config)
+    from .notify import telegram
+
+    notifier = telegram.from_settings(settings)
+    if notifier is None:
+        typer.secho("❌ 텔레그램 미설정 — .env 에 TELEGRAM_BOT_TOKEN 을 넣으세요.", fg="red")
+        raise typer.Exit(code=1)
+
+    commands = [
+        {"command": "join",     "description": "초대코드로 참여 — /join 초대코드"},
+        {"command": "start",    "description": "알림 구독 시작 + 도움말"},
+        {"command": "stop",     "description": "알림 구독 해제"},
+        {"command": "list",     "description": "텔레그램으로 추가한 단지 목록"},
+        {"command": "add",      "description": "단지 추가 — /add 1234 또는 /add 단지명"},
+        {"command": "check",    "description": "매물 즉시 조회 — /check 1234 또는 /check 단지명"},
+        {"command": "deals",    "description": "실거래 조회 — /deals 1234 또는 /deals 단지명"},
+        {"command": "permits",  "description": "토지거래허가 조회 — /permits [단지명]"},
+        {"command": "discover", "description": "지역 신규편입 단지 즉시 탐색"},
+        {"command": "band",     "description": "관심 가격대(억) 설정 — /band 7 12 (보기: /band)"},
+        {"command": "help",     "description": "명령어 도움말"},
+    ]
+    notifier.set_commands(commands)
+    notifier.close()
+    typer.echo(f"✅ {len(commands)}개 명령어 등록 완료 — 텔레그램에서 / 를 눌러 확인하세요.")
+
+
+@app.command()
+def probe(
+    complex_no: str = typer.Argument(..., help="네이버 단지번호"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+    limit: int = typer.Option(5, help="출력할 매물 수"),
+) -> None:
+    """단지 매물을 실제로 수집해 new.land 연동을 검증 (헤드리스 브라우저로 토큰 자동 발급)."""
+    cfg, _ = _load(config)
+    from .db.models import Complex
+    from .naver.client import NaverLandClient
+
+    target = next(
+        (t for t in cfg.targets if t.kind == "complex" and t.complex_no == complex_no),
+        None,
+    )
+    filt = cfg.effective_filter(target) if target else cfg.defaults
+    cx = Complex(complex_no=complex_no)
+
+    typer.echo("🌐 헤드리스 브라우저로 토큰 발급 + 수집 중…")
+    with NaverLandClient(
+        request_delay_seconds=cfg.app.request_delay_seconds, headless=headless
+    ) as client:
+        result = client.fetch_articles(cx, filt)
+
+    typer.echo(
+        f"수집 {result.raw_count}건 (파싱성공 {len(result.articles)}, 실패 {result.parse_failures}) · "
+        f"페이지 {result.pages} · 완료={result.complete}"
+    )
+    for dto in result.articles[:limit]:
+        typer.echo(dto.model_dump_json(indent=2))
+
+
+@app.command(name="probe-deals")
+def probe_deals(
+    complex_no: str = typer.Argument(..., help="네이버 단지번호"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+    year: int = typer.Option(3, help="실거래 조회 기간(년)"),
+    limit: int = typer.Option(10, help="출력할 거래 수"),
+) -> None:
+    """단지 실거래를 실제로 수집해 new.land prices/real 연동을 검증."""
+    cfg, _ = _load(config)
+    from .constants import NAVER_TRADE_CODE
+    from .core.deal_collector import select_pyeongs
+    from .naver.client import NaverLandClient
+
+    target = next(
+        (t for t in cfg.targets if t.kind == "complex" and t.complex_no == complex_no), None
+    )
+    filt = cfg.effective_filter(target) if target else cfg.defaults
+    trade_codes = [NAVER_TRADE_CODE[t] for t in cfg.deals.trade_types]
+
+    typer.echo("🌐 헤드리스 브라우저로 토큰 발급 + 평형/실거래 수집 중…")
+    with NaverLandClient(
+        request_delay_seconds=cfg.app.request_delay_seconds, headless=headless
+    ) as client:
+        pyeongs = client.fetch_pyeongs(complex_no)
+        selected = select_pyeongs(pyeongs, filt, cfg.deals.use_area_filter)
+        typer.echo(
+            f"평형 {len(pyeongs)}종 중 면적필터 통과 {len(selected)}종: "
+            + ", ".join(
+                f"{p.pyeong_name}({p.area_supply:g}㎡공급)" for p in selected if p.area_supply
+            )
+        )
+        result = client.fetch_deals(complex_no, selected, trade_codes, year=year)
+
+    typer.echo(f"수집 {result.raw_count}건 · 평형 {result.pyeongs}종 · 완료={result.complete}")
+    for d in sorted(result.deals, key=lambda x: x.deal_date, reverse=True)[:limit]:
+        flag = " [취소]" if d.cancelled else ""
+        typer.echo(
+            f"  {d.deal_date}  {d.pyeong_name or ''}({d.area_excl}㎡)  "
+            f"{d.price_deal}만  {d.floor}층{flag}"
+        )
+
+
+@app.command(name="probe-permits")
+def probe_permits(
+    sgg: str = typer.Argument(..., help="자치구 코드(11680) 또는 이름(강남구)"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    days: int = typer.Option(60, help="조회 기간(일, 최대 62)"),
+    limit: int = typer.Option(20, help="출력할 허가 건수"),
+) -> None:
+    """서울시 토지거래허가 내역을 직접 조회해 land.seoul.go.kr 연동을 검증(브라우저 불필요)."""
+    import collections
+    from datetime import timedelta
+
+    from .constants import now_kst
+    from .seoul.client import SeoulLandClient
+    from .seoul.permit_parser import RESIDENTIAL
+
+    _load(config)
+    now = now_kst()
+    end_s = now.strftime("%Y%m%d")
+    begin_s = (now - timedelta(days=min(days, 62))).strftime("%Y%m%d")
+
+    typer.echo("🌐 land.seoul.go.kr 조회 중…")
+    with SeoulLandClient() as client:
+        sgg_map = client.fetch_sgg_list()
+        sgg_cd = sgg if sgg.isdigit() else next((k for k, v in sgg_map.items() if v == sgg), "")
+        if not sgg_cd or sgg_cd not in sgg_map:
+            typer.secho(f"자치구를 찾을 수 없습니다: {sgg}", fg="red")
+            raise typer.Exit(code=1)
+        permits = client.fetch_permits(sgg_cd, begin_s, end_s)
+
+    res = [p for p in permits if p.use_purp == RESIDENTIAL]
+    typer.echo(
+        f"{sgg_map[sgg_cd]}({sgg_cd}) {begin_s}~{end_s}: 전체 {len(permits)}건 · 주거용 {len(res)}건"
+    )
+    dist = collections.Counter(p.job_gbn for p in permits)
+    typer.echo("처리구분: " + ", ".join(f"{k} {v}" for k, v in dist.items()))
+    for p in sorted(res, key=lambda x: x.permit_date or "", reverse=True)[:limit]:
+        jb = f"{p.bonbun}-{p.bubun}" if p.bonbun else "?"
+        typer.echo(f"  {p.permit_date}  {p.address}  [{jb}]  {p.job_gbn}")
+
+
+@app.command(name="probe-search")
+def probe_search(
+    keyword: str = typer.Argument(..., help="검색어(단지명 또는 주소). 예: '방배 삼호1차'"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    seed: str = typer.Option("947", help="토큰 발급용 seed 단지번호"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+) -> None:
+    """단지명/주소 검색(주소→단지번호 역추적) new.land /api/search 연동을 검증."""
+    cfg, _ = _load(config)
+    from .naver.client import NaverLandClient
+
+    typer.echo(f"🌐 '{keyword}' 검색 중… (seed={seed})")
+    with NaverLandClient(
+        request_delay_seconds=cfg.app.request_delay_seconds, headless=headless
+    ) as client:
+        hits = client.search_complexes(keyword, seed_complex_no=seed)
+
+    typer.echo(f"검색 결과 {len(hits)}건")
+    for h in hits:
+        bits = [f"  {h.complex_no}  {h.name}"]
+        if h.address:
+            bits.append(h.address)
+        if h.type_name:
+            bits.append(h.type_name)
+        if h.households:
+            bits.append(f"{h.households}세대")
+        typer.echo(" · ".join(bits))
+
+
+@app.command(name="probe-markers")
+def probe_markers(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    region: str = typer.Option("", help="특정 지역 라벨만(비우면 전체)"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+    limit: int = typer.Option(8, help="지역별 출력할 단지 수"),
+) -> None:
+    """지역 single-markers 탐색을 실제로 수집해 연동 검증(지역별 밴드 편입 단지 카운트)."""
+    cfg, _ = _load(config)
+    from .naver.client import NaverLandClient
+
+    disc = cfg.discover
+    regions = [r for r in disc.regions if not region or r.name == region]
+    if not regions:
+        typer.secho(f"⚠ 탐색 지역이 없습니다(필터: '{region}').", fg="yellow")
+        raise typer.Exit(code=0)
+    seed = disc.seed_complex_no or next(
+        (t.complex_no for t in cfg.targets if t.kind == "complex" and t.complex_no), "947"
+    )
+
+    typer.echo(
+        f"🌐 헤드리스 브라우저로 토큰 발급(seed={seed}) + 마커 수집 중… "
+        f"(매매 {disc.price_min_manwon:,}~{disc.price_max_manwon:,}만 · 세대수≥{disc.min_households})"
+    )
+    total: set[str] = set()
+    with NaverLandClient(
+        request_delay_seconds=cfg.app.request_delay_seconds, headless=headless
+    ) as client:
+        for r in regions:
+            try:
+                markers = client.fetch_markers(r, disc, seed_complex_no=seed)
+            except Exception as e:  # noqa: BLE001
+                typer.secho(f"  {r.name}: 실패 — {e}", fg="red")
+                continue
+            cap = "  ⚠️500캡" if len(markers) >= 500 else ""
+            typer.echo(f"\n■ {r.name}: {len(markers)}개 편입{cap}")
+            for dc in sorted(markers, key=lambda d: (d.min_deal_price or 0))[:limit]:
+                total.add(dc.complex_no)
+                typer.echo(
+                    f"    {dc.complex_no} {dc.name} · {dc.min_deal_price:,}~{dc.max_deal_price:,}만 "
+                    f"· {dc.total_households}세대 · {dc.min_area}~{dc.max_area}㎡ · {dc.real_estate_type}"
+                )
+            for dc in markers:
+                total.add(dc.complex_no)
+    typer.echo(f"\n전체 고유 편입 단지: {len(total)}개")
+
+
+@app.command(name="fill-meta")
+def fill_meta(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    limit: int = typer.Option(500, help="처리할 최대 단지 수"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+) -> None:
+    """메타 미설정 단지에 세대수/동수/준공/용적률/건폐율을 일괄 채운다 (Naver 단지 API 호출)."""
+    from sqlmodel import Session, select
+
+    from .db import repo
+    from .db.engine import make_engine
+    from .db.models import Complex
+    from .naver.client import NaverLandClient
+
+    cfg, _ = _load(config)
+    engine = make_engine(cfg.app.db_path)
+
+    with Session(engine) as session:
+        targets = session.exec(
+            select(Complex).where(Complex.floor_area_ratio == None).limit(limit)  # noqa: E711
+        ).all()
+
+    if not targets:
+        typer.echo("✅ 메타 없는 단지가 없습니다.")
+        return
+
+    typer.echo(f"🌐 헤드리스 브라우저로 단지 메타 조회 시작 ({len(targets)}개 단지)")
+    ok = fail = 0
+    with NaverLandClient(headless=headless) as client:
+        for cx in targets:
+            meta = client.fetch_complex_meta(cx.complex_no)
+            with Session(engine) as session:
+                if meta and meta.floor_area_ratio is not None:
+                    repo.upsert_complex(
+                        session,
+                        cx.complex_no,
+                        lat=meta.lat,
+                        lon=meta.lon,
+                        total_households=meta.total_households,
+                        total_dong_count=meta.total_dong_count,
+                        use_approve_ymd=meta.use_approve_ymd,
+                        floor_area_ratio=meta.floor_area_ratio,
+                        building_coverage_ratio=meta.building_coverage_ratio,
+                    )
+                    typer.echo(
+                        f"  ✅ {cx.complex_no} {cx.name}: "
+                        f"{meta.total_households}세대({meta.total_dong_count}동) "
+                        f"{meta.use_approve_ymd} 용적률{meta.floor_area_ratio}%"
+                    )
+                    ok += 1
+                else:
+                    typer.echo(f"  ⚠  {cx.complex_no} {cx.name}: 메타 없음")
+                    fail += 1
+
+    typer.echo(f"\n완료: 성공 {ok} / 실패 {fail}")
+
+
+@app.command(name="fill-coords")
+def fill_coords(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    limit: int = typer.Option(100, help="처리할 최대 단지 수"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+) -> None:
+    """좌표 미설정 단지에 lat/lon을 일괄 채운다 (Naver 단지 API 호출)."""
+    from sqlmodel import Session, select
+
+    from .db import repo
+    from .db.engine import make_engine
+    from .db.models import Complex
+    from .naver.client import NaverLandClient
+
+    cfg, _ = _load(config)
+    engine = make_engine(cfg.app.db_path)
+
+    with Session(engine) as session:
+        targets = session.exec(
+            select(Complex).where(Complex.lat == None).limit(limit)  # noqa: E711
+        ).all()
+
+    if not targets:
+        typer.echo("✅ 좌표 없는 단지가 없습니다.")
+        return
+
+    typer.echo(f"🌐 헤드리스 브라우저로 좌표 조회 시작 ({len(targets)}개 단지)")
+    ok = fail = 0
+    with NaverLandClient(headless=headless) as client:
+        for cx in targets:
+            coords = client.fetch_complex_coords(cx.complex_no)
+            with Session(engine) as session:
+                if coords:
+                    repo.upsert_complex(session, cx.complex_no, lat=coords[0], lon=coords[1])
+                    typer.echo(f"  ✅ {cx.complex_no} {cx.name}: {coords}")
+                    ok += 1
+                else:
+                    typer.echo(f"  ⚠  {cx.complex_no} {cx.name}: 좌표 없음")
+                    fail += 1
+
+    typer.echo(f"\n완료: 성공 {ok} / 실패 {fail}")
+
+
+@app.command(name="fill-jibun")
+def fill_jibun(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+    only: str = typer.Option("", help="쉼표구분 단지번호(미지정=지번 없는 전 단지)"),
+) -> None:
+    """추적단지 대표지번 백필(토지거래허가 매칭용). 네이버 단지상세를 단지당 1회 조회."""
+    from .core.permit_backfill import backfill_jibun
+    from .db.engine import get_session
+
+    cfg, _ = _load(config)
+    cfg.app.headless = headless
+    engine = make_engine(cfg.app.db_path)
+    init_db(engine)
+    nos = [s.strip() for s in only.split(",") if s.strip()] or None
+
+    typer.echo("🌐 네이버 단지상세로 지번 백필 중…")
+    with get_session(engine) as session:
+
+        def _prog(no: str, name: str, ok: bool) -> None:
+            typer.echo(f"  {'✅' if ok else '❌'} {no} {name}")
+
+        filled = backfill_jibun(cfg, session, complex_nos=nos, progress=_prog)
+    typer.echo(f"\n완료: {filled} 단지 지번 채움")
+
+
+@app.command()
+def serve(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(8765),
+) -> None:
+    """로컬 대시보드 서버 실행. create_app 팩토리가 엔진/DB 초기화를 담당한다."""
+    import uvicorn
+
+    _load(config)  # 설정 검증(없으면 명확한 에러)
+    os.environ["MYHOUSE_CONFIG"] = config  # 팩토리가 읽을 config 경로 전달
+    typer.echo(f"🌐 대시보드: http://{host}:{port}  (config={config})")
+    uvicorn.run(
+        "myhouse.web.app:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+
+
+@app.command()
+def bot(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    poll_timeout: int = typer.Option(50, help="롱폴링 타임아웃(초)"),
+) -> None:
+    """텔레그램 양방향 봇(롱폴링) 실행 — /add /check /deals 명령 처리. 상시 구동용."""
+    from .bot import run_bot
+
+    run_bot(config, poll_timeout=poll_timeout)
+
+
+@app.command(name="backup-db")
+def backup_db(config: str = typer.Option("config.yaml", help="설정 파일 경로")) -> None:
+    """SQLite 파일을 타임스탬프 사본으로 백업."""
+    cfg, _ = _load(config)
+    src = Path(cfg.app.db_path)
+    if not src.exists():
+        typer.secho(f"❌ DB 파일 없음: {src}", fg="red")
+        raise typer.Exit(code=1)
+    stamp = now_kst().strftime("%Y%m%d-%H%M%S")
+    dst = src.with_name(f"{src.stem}.{stamp}.bak{src.suffix}")
+    shutil.copy2(src, dst)
+    typer.echo(f"✅ 백업: {dst}")
+
+
+if __name__ == "__main__":
+    app()

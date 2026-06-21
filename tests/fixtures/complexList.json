@@ -1,0 +1,29 @@
+{
+  "code": "success",
+  "complexList": [
+    {
+      "hscpNo": "111515",
+      "hscpNm": "한솔마을주공5단지",
+      "totHsehCnt": 1156,
+      "lat": 37.3595,
+      "lng": 127.1054,
+      "cortarNo": "4113510300"
+    },
+    {
+      "hscpNo": "8928",
+      "hscpNm": "정자동 두산위브",
+      "totHsehCnt": 250,
+      "lat": 37.36,
+      "lng": 127.106,
+      "cortarNo": "4113510300"
+    },
+    {
+      "hscpNo": "9999",
+      "hscpNm": "정자 우성오피스텔",
+      "totHsehCnt": 80,
+      "lat": 37.361,
+      "lng": 127.107,
+      "cortarNo": "4113510300"
+    }
+  ]
+}

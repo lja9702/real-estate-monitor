@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "_area_group_table.html" import areagrouptable %}
+{% block content %}
+
+<script>
+const GU_DONG = {{ gu_dong_map | tojson }};
+function onGuChange() {
+  const gu = document.querySelector('[name=gu]').value;
+  const sel = document.querySelector('[name=dong]');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">동 전체</option>';
+  (GU_DONG[gu] || []).forEach(d => {
+    const o = document.createElement('option');
+    o.value = d; o.textContent = d;
+    if (d === cur) o.selected = true;
+    sel.appendChild(o);
+  });
+  document.querySelector('[name=complex_no]').value = '';
+  document.querySelector('.filters').submit();
+}
+</script>
+
+<form class="filters" method="get" action="/">
+  <select name="gu" onchange="onGuChange()">
+    <option value="">구 전체</option>
+    {% for gu in gu_dong_map %}
+      <option value="{{ gu }}" {{ 'selected' if f.gu == gu }}>{{ gu }}</option>
+    {% endfor %}
+  </select>
+  <select name="dong" onchange="document.querySelector('[name=complex_no]').value=''; this.form.submit()">
+    <option value="">동 전체</option>
+    {% for dong in (gu_dong_map.get(f.gu, []) if f.gu else gu_dong_map.values() | sum(start=[])) %}
+      <option value="{{ dong }}" {{ 'selected' if f.dong == dong }}>{{ dong }}</option>
+    {% endfor %}
+  </select>
+  <select name="complex_no" onchange="this.form.submit()">
+    <option value="">단지 전체</option>
+    {% for c in complexes %}
+      <option value="{{ c.complex_no }}" {{ 'selected' if f.complex_no == c.complex_no }}>{{ c.name or c.complex_no }}</option>
+    {% endfor %}
+  </select>
+  <select name="trade_type" onchange="this.form.submit()">
+    <option value="">거래 전체</option>
+    <option value="SALE" {{ 'selected' if f.trade_type == 'SALE' }}>매매</option>
+    <option value="JEONSE" {{ 'selected' if f.trade_type == 'JEONSE' }}>전세</option>
+    <option value="WOLSE" {{ 'selected' if f.trade_type == 'WOLSE' }}>월세</option>
+  </select>
+  <select name="status" onchange="this.form.submit()">
+    {% for v, lbl in [('active','거래중'),('new','신규만'),('removed','거래완료'),('all','전체')] %}
+      <option value="{{ v }}" {{ 'selected' if f.status == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <input name="q" value="{{ f.q or '' }}" placeholder="검색(단지/향/특징)" onchange="this.form.submit()">
+  <input name="price_min" value="{{ f.price_min or '' }}" placeholder="가격↓(만원)" size="8" inputmode="numeric" onchange="this.form.submit()">
+  <input name="price_max" value="{{ f.price_max or '' }}" placeholder="가격↑(만원)" size="8" inputmode="numeric" onchange="this.form.submit()">
+  <input name="area_min" value="{{ f.area_min or '' }}" placeholder="전용↓㎡" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="area_max" value="{{ f.area_max or '' }}" placeholder="전용↑㎡" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="floor_min" value="{{ f.floor_min or '' }}" placeholder="최저층" size="5" inputmode="numeric" onchange="this.form.submit()">
+  <input name="households_min" value="{{ f.households_min or '' }}" placeholder="세대수↓" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="households_max" value="{{ f.households_max or '' }}" placeholder="세대수↑" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_min" value="{{ f.year_min or '' }}" placeholder="준공↓(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <input name="year_max" value="{{ f.year_max or '' }}" placeholder="준공↑(년)" size="6" inputmode="numeric" onchange="this.form.submit()">
+  <select name="sort" onchange="this.form.submit()">
+    {% for v, lbl in [('new','신규순'),('price_asc','가격↑'),('price_desc','가격↓'),('area_desc','면적↓'),('confirm_desc','최신확인')] %}
+      <option value="{{ v }}" {{ 'selected' if f.sort == v }}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+  <label class="chk"><input type="checkbox" name="starred_only" {{ 'checked' if f.starred_only }} onchange="this.form.submit()"> 관심단지만</label>
+  <label class="chk"><input type="checkbox" name="show_excluded" {{ 'checked' if f.show_excluded }} onchange="this.form.submit()"> 제외포함</label>
+  <a class="btn ghost" href="/">초기화</a>
+</form>
+
+<div class="summary">총 <b>{{ total }}</b>건 · 신규 <b>{{ new_count }}</b>건</div>
+
+{{ areagrouptable(rows) }}
+{% endblock %}

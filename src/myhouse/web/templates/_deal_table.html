@@ -1,0 +1,34 @@
+{% macro dealtable(rows, show_complex=true) %}
+<table class="listings deals">
+  <thead>
+    <tr>
+      {% if show_complex %}<th>단지</th>{% endif %}
+      <th>평형</th><th>거래일</th><th>거래</th><th>가격(만원)</th><th>층</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr class="{{ 'is-new' if row.is_new }} {{ 'deal-cancelled' if row.cancelled }}">
+      {% if show_complex %}
+      <td>
+        <a href="/complex/{{ row.complex_no }}" class="cx">{{ row.complex_name }}</a>
+        {% if row.address_short %}<span class="addr-short">{{ row.address_short }}</span>{% endif %}
+        {% if row.meta_line %}<span class="addr-short">{{ row.meta_line }}</span>{% endif %}
+      </td>
+      {% endif %}
+      <td>{{ row.pyeong_name or '' }}{% if row.area_excl %} <span class="muted">{{ '%g'|format(row.area_excl) }}㎡</span>{% endif %}</td>
+      <td class="muted">{{ row.deal_date }}</td>
+      <td><span class="trade {{ row.trade_ko }}">{{ row.trade_ko }}</span></td>
+      <td class="price">{{ row.price_deal|manwon }}{% if row.price_rent %} / {{ row.price_rent|manwon }}{% endif %}</td>
+      <td>{% if row.floor is not none %}{{ row.floor }}층{% endif %}</td>
+      <td>
+        {% if row.is_new %}<span class="badge new">신규</span>{% endif %}
+        {% if row.cancelled %}<span class="badge cancelled">취소</span>{% endif %}
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="{{ 7 if show_complex else 6 }}" class="empty">실거래가 없습니다. 우측 상단 <b>실거래 수집</b> 으로 수집하거나 필터를 조정하세요.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}

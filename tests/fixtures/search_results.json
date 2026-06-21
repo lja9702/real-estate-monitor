@@ -1,0 +1,46 @@
+{
+  "keyword": "방배삼호1차",
+  "complexes": [
+    {
+      "complexNo": "947",
+      "complexName": "삼호1차",
+      "cortarNo": "1165010100",
+      "realEstateTypeCode": "JGC",
+      "realEstateTypeName": "재건축",
+      "latitude": 37.495335,
+      "longitude": 126.987687,
+      "totalHouseholdCount": 419,
+      "totalDongCount": 3,
+      "useApproveYmd": "19751128",
+      "minSupplyArea": 80.85,
+      "maxSupplyArea": 164.16,
+      "cortarAddress": "서울시 서초구 방배동",
+      "deepLink": "/complexes/947"
+    },
+    {
+      "complexNo": "12345",
+      "complexName": "방배삼호2차",
+      "cortarNo": "1165010100",
+      "realEstateTypeName": "아파트",
+      "latitude": 37.4951,
+      "longitude": 126.9881,
+      "totalHouseholdCount": 210,
+      "cortarAddress": "서울시 서초구 방배동"
+    },
+    {
+      "complexName": "번호없는단지(스킵대상)",
+      "cortarAddress": "서울시 서초구 방배동"
+    }
+  ],
+  "regions": [
+    {
+      "cortarNo": "1165010100",
+      "centerLat": 37.484265,
+      "centerLon": 126.98864,
+      "cortarName": "서울시 서초구 방배동",
+      "cortarType": "sec"
+    }
+  ],
+  "isMoreData": false,
+  "totalCount": 2
+}

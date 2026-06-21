@@ -1,0 +1,1533 @@
+# ───────────────────────────────────────────────────────────────────────────
+# 네이버부동산 매물 모니터 설정 (비밀값 없음 — 텔레그램 토큰은 .env)
+# 매물은 new.land.naver.com 에서 단지번호로 수집(헤드리스 브라우저가 토큰 자동 발급).
+# ───────────────────────────────────────────────────────────────────────────
+app:
+  timezone: "Asia/Seoul"
+  db_path: "data/myhouse.db"
+  dashboard_url: "http://localhost:8765"   # 텔레그램 메시지에 넣을 대시보드 링크
+  removal_debounce_hours: 20               # 이 시간 이상 연속 미노출이어야 '거래완료' 확정
+  request_delay_seconds: [1.0, 3.0]        # 페이지 요청 사이 랜덤 지연(초)
+  notify_on_no_change: false               # 변화 0건이어도 알림 보낼지
+  headless: true                           # Playwright 브라우저 표시 여부(디버그 시 false)
+
+# 모든 타겟에 공통 적용되는 기본 필터 (각 타겟의 overrides 로 덮어씀)
+defaults:
+  trade_types: ["SALE"]              # SALE(매매) | JEONSE(전세) | WOLSE(월세) — 복수 가능
+  real_estate_type: "APT:ABYG:JGC"   # 아파트:분양권:재건축 (재건축 단지도 포함)
+  area_excl_min_m2: null             # 전용면적(㎡) 하한 — null = 제한없음
+  area_excl_max_m2: null
+  area_supply_min_m2: 66             # 공급면적(㎡) 하한 (area1)
+  area_supply_max_m2: 131            # 공급면적(㎡) 상한 (area1)
+  price_max_manwon: 300000           # 매매가/보증금 상한 (만원). 30억 = 300000
+  price_min_manwon: null
+  floor_min: null                    # 최저층 (1층/반지하 제외 시 2)
+
+# 실거래(국토부 실거래가 — 네이버 prices/real 경유) 수집 설정.
+# 매물(호가)과 별개로 하루 1회 수집해 신규 실거래/취소를 텔레그램 알림 + /deals 화면에 표시.
+deals:
+  enabled: true              # 실거래 수집·알림 사용 여부
+  trade_types: ["SALE"]      # SALE(매매)만 — 전세/월세도: ["SALE","JEONSE","WOLSE"]
+  years: 3                   # 실거래 조회 기간(년). 최신 거래가 먼저 옴
+  scope: "all"               # all(전체 추적단지) | starred(별표 단지만)
+  use_area_filter: true      # 위 defaults 의 면적필터로 평형을 제한해 호출량↓
+  notify_on_no_change: false # 신규 실거래 0건이어도 알림 보낼지
+
+# 토지거래허가(서울시 land.seoul.go.kr) — 실거래의 *선행* 신호(거래완료·신고 전에 뜨는 허가).
+# 추적단지가 있는 서울 자치구만 1회씩 조회(최대 62일)하고, 단지 대표지번에 매칭된 '허가'만 알림한다.
+# ⚠️ 가격·면적은 없음(거래활성 신호) — 가격은 실거래로 확인. 단지 지번 백필은 실거래 수집이 자동 수행.
+permits:
+  enabled: true              # 토지거래허가 수집·알림 사용 여부
+  days: 60                   # 조회 기간(일). 서버 제약상 최대 62 로 자동 캡
+  scope: "all"               # all(전체 추적단지) | starred(별표 단지만)
+  use_purpose_filter: true   # 이용목적=주거용만 매칭(아파트 거래로 한정)
+  notify_on_no_change: false # 신규 허가 0건이어도 알림 보낼지
+
+# 주간 신규편입 단지 탐색 (single-markers 지도 마커 기반).
+# 지정 지역을 주 1회(launchd 월요일 09:00) 훑어 매매 15~26억·세대수≥300·공급 66~131㎡ 조건에
+# '새로 든' 단지를 텔레그램 알림. 추가(추적)는 사용자가 /add 로 직접 한다. 첫 회차는 baseline(무알림).
+# ⚠️ 라이브 검증(2026-06): cortarNo 는 서버측 필터가 아니라 bbox 가 유일한 지리 경계이고,
+# bbox 1회 응답은 500개로 캡된다. 단 price/area/세대수 서버측 필터를 걸면 구당 1회로 캡 아래 완전수집.
+# bbox = [leftLon, rightLon, topLat, bottomLat]. 누락/노이즈가 있으면 bbox 를 조여/넓혀 조정.
+discover:
+  enabled: true
+  trade_type: "SALE"
+  real_estate_type: "APT:ABYG:JGC"
+  price_min_manwon: 150000     # 15억
+  price_max_manwon: 260000     # 26억
+  area_supply_min_m2: 66       # 마커 minArea/maxArea(공급 추정) 서버측 필터
+  area_supply_max_m2: 131
+  min_households: 300
+  zoom: 13
+  seed_complex_no: "947"       # 토큰 발급용 시드(방배 삼호1차)
+  notify_on_no_change: false
+  regions:
+    - { name: "강남구", cortar_no: "1168000000", bbox: [127.01, 127.13, 37.55, 37.46] }
+    - { name: "서초구", cortar_no: "1165000000", bbox: [126.98, 127.06, 37.52, 37.43] }
+    - { name: "송파구", cortar_no: "1171000000", bbox: [127.06, 127.17, 37.54, 37.47] }
+    - { name: "용산구", cortar_no: "1117000000", bbox: [126.95, 127.02, 37.56, 37.51] }
+    - { name: "성동구", cortar_no: "1120000000", bbox: [127.01, 127.08, 37.58, 37.53] }
+    - { name: "동작구", cortar_no: "1159000000", bbox: [126.92, 126.99, 37.52, 37.47] }
+    - { name: "여의도", cortar_no: "1156000000", bbox: [126.91, 126.97, 37.54, 37.51] }
+    - { name: "과천시", cortar_no: "4129000000", bbox: [126.98, 127.04, 37.45, 37.41] }
+
+# discovered_accurate.json 기준: 매매 15~26억 AND 공급(area1) 66~131㎡, 세대수>=300
+# 탐색일: 2026-06-20 | 대상: 강남구·과천시·동작구·서초구·성동구·송파구·용산구 (여의도동 0개)
+# 총 481개 단지
+targets:
+  # ── 강남구 ──
+  - kind: complex
+    complex_no: "19405"
+    label: "도곡아이파크1차"
+  - kind: complex
+    complex_no: "11698"
+    label: "도곡렉슬"
+  - kind: complex
+    complex_no: "598"
+    label: "가락쌍용1차"
+  - kind: complex
+    complex_no: "18541"
+    label: "서울숲푸르지오1차"
+  - kind: complex
+    complex_no: "26222"
+    label: "송파파인타운3단지"
+  - kind: complex
+    complex_no: "562"
+    label: "옥수극동"
+  - kind: complex
+    complex_no: "1286"
+    label: "벽산"
+  - kind: complex
+    complex_no: "626"
+    label: "대림"
+  - kind: complex
+    complex_no: "93"
+    label: "자양우성3차"
+  - kind: complex
+    complex_no: "3833"
+    label: "남산타운"
+  - kind: complex
+    complex_no: "166537"
+    label: "힐스테이트e편한세상문정"
+  - kind: complex
+    complex_no: "612"
+    label: "코오롱"
+  - kind: complex
+    complex_no: "27575"
+    label: "래미안하이리버"
+  - kind: complex
+    complex_no: "107544"
+    label: "송파파크하비오푸르지오"
+  - kind: complex
+    complex_no: "547"
+    label: "두산"
+  - kind: complex
+    complex_no: "92"
+    label: "우성2차"
+  - kind: complex
+    complex_no: "618"
+    label: "한양2차"
+  - kind: complex
+    complex_no: "100692"
+    label: "래미안옥수리버젠"
+  - kind: complex
+    complex_no: "2976"
+    label: "대림강변타운"
+  - kind: complex
+    complex_no: "569"
+    label: "대림1차"
+  - kind: complex
+    complex_no: "90"
+    label: "우성1차"
+  - kind: complex
+    complex_no: "103602"
+    label: "강남LH1단지(e편한세상)"
+  - kind: complex
+    complex_no: "100595"
+    label: "금호리버힐자이"
+  - kind: complex
+    complex_no: "3417"
+    label: "금호삼성래미안"
+  - kind: complex
+    complex_no: "97"
+    label: "우성7차"
+  - kind: complex
+    complex_no: "110939"
+    label: "힐스테이트서울숲리버"
+  - kind: complex
+    complex_no: "26479"
+    label: "송파파인타운2단지"
+  - kind: complex
+    complex_no: "594"
+    label: "가락금호"
+  - kind: complex
+    complex_no: "100340"
+    label: "금호센트럴자이"
+  - kind: complex
+    complex_no: "2975"
+    label: "금호대우"
+  - kind: complex
+    complex_no: "110938"
+    label: "e편한세상옥수파크힐스"
+  - kind: complex
+    complex_no: "1179"
+    label: "옥수삼성"
+  - kind: complex
+    complex_no: "26481"
+    label: "송파파인타운6단지"
+  - kind: complex
+    complex_no: "26472"
+    label: "송파파인타운5단지"
+  - kind: complex
+    complex_no: "113680"
+    label: "강남자곡아이파크"
+  - kind: complex
+    complex_no: "107799"
+    label: "강남데시앙포레"
+  - kind: complex
+    complex_no: "1196"
+    label: "가락쌍용2차"
+  - kind: complex
+    complex_no: "983"
+    label: "푸른마을"
+  - kind: complex
+    complex_no: "101322"
+    label: "서울숲푸르지오2차"
+  - kind: complex
+    complex_no: "25929"
+    label: "송파파인타운10단지"
+  - kind: complex
+    complex_no: "608"
+    label: "건영"
+  - kind: complex
+    complex_no: "7993"
+    label: "서울숲리버그린동아"
+  - kind: complex
+    complex_no: "103578"
+    label: "세곡푸르지오"
+  - kind: complex
+    complex_no: "99"
+    label: "한라"
+  - kind: complex
+    complex_no: "25930"
+    label: "송파파인타운11단지"
+  - kind: complex
+    complex_no: "3530"
+    label: "서울숲대림"
+  - kind: complex
+    complex_no: "419"
+    label: "대청"
+  - kind: complex
+    complex_no: "106166"
+    label: "강남브리즈힐"
+  - kind: complex
+    complex_no: "104967"
+    label: "래미안강남힐즈"
+  - kind: complex
+    complex_no: "365"
+    label: "현대1차"
+  - kind: complex
+    complex_no: "668"
+    label: "삼익"
+  - kind: complex
+    complex_no: "483"
+    label: "대치2단지"
+  - kind: complex
+    complex_no: "560"
+    label: "한진타운"
+  - kind: complex
+    complex_no: "571"
+    label: "대림2차"
+  - kind: complex
+    complex_no: "556"
+    label: "쌍용"
+  - kind: complex
+    complex_no: "827"
+    label: "수서1-2단지"
+  - kind: complex
+    complex_no: "109107"
+    label: "강남한신휴플러스6단지"
+  - kind: complex
+    complex_no: "10316"
+    label: "금호1차푸르지오"
+  - kind: complex
+    complex_no: "88"
+    label: "대동"
+  - kind: complex
+    complex_no: "13457"
+    label: "더샵스타시티(주상복합)"
+  - kind: complex
+    complex_no: "572"
+    label: "금호현대"
+  - kind: complex
+    complex_no: "596"
+    label: "미륭"
+  - kind: complex
+    complex_no: "563"
+    label: "극동그린"
+  - kind: complex
+    complex_no: "3033"
+    label: "문정래미안"
+  - kind: complex
+    complex_no: "10647"
+    label: "금호한신휴플러스"
+  - kind: complex
+    complex_no: "8103"
+    label: "성수아이파크"
+  - kind: complex
+    complex_no: "908"
+    label: "삼성"
+  - kind: complex
+    complex_no: "671"
+    label: "신동아"
+  - kind: complex
+    complex_no: "611"
+    label: "대림가락(방이대림)"
+  - kind: complex
+    complex_no: "567"
+    label: "옥수현대"
+  - kind: complex
+    complex_no: "103252"
+    label: "강남데시앙파크"
+  - kind: complex
+    complex_no: "595"
+    label: "가락대림"
+  - kind: complex
+    complex_no: "348"
+    label: "가락우성1차"
+  - kind: complex
+    complex_no: "26106"
+    label: "송파파인타운7단지"
+  - kind: complex
+    complex_no: "633"
+    label: "현대백조"
+  - kind: complex
+    complex_no: "103139"
+    label: "래미안송파파인탑"
+  - kind: complex
+    complex_no: "640"
+    label: "현대"
+  - kind: complex
+    complex_no: "8203"
+    label: "삼성"
+  - kind: complex
+    complex_no: "107458"
+    label: "강남한양수자인"
+  - kind: complex
+    complex_no: "174198"
+    label: "잠실더샵루벤"
+  - kind: complex
+    complex_no: "102670"
+    label: "강남신동아파밀리에3단지"
+  - kind: complex
+    complex_no: "980"
+    label: "삼성청담공원"
+  - kind: complex
+    complex_no: "657"
+    label: "동익"
+  - kind: complex
+    complex_no: "87"
+    label: "한강우성"
+  - kind: complex
+    complex_no: "3751"
+    label: "잠실한솔"
+  - kind: complex
+    complex_no: "568"
+    label: "신동아"
+  - kind: complex
+    complex_no: "107457"
+    label: "래미안포레"
+  - kind: complex
+    complex_no: "552"
+    label: "성수동아그린"
+  - kind: complex
+    complex_no: "593"
+    label: "극동"
+  - kind: complex
+    complex_no: "971"
+    label: "대치현대"
+  - kind: complex
+    complex_no: "641"
+    label: "까치마을"
+  - kind: complex
+    complex_no: "135887"
+    label: "롯데캐슬리버파크시그니처"
+  - kind: complex
+    complex_no: "125278"
+    label: "자양호반써밋(주상복합)"
+  - kind: complex
+    complex_no: "102668"
+    label: "강남신동아파밀리에1단지"
+  - kind: complex
+    complex_no: "102669"
+    label: "강남신동아파밀리에2단지"
+  - kind: complex
+    complex_no: "111515"
+    label: "헬리오시티"
+  - kind: complex
+    complex_no: "12948"
+    label: "송파성원상떼빌(주상복합)"
+  - kind: complex
+    complex_no: "637"
+    label: "우성4차"
+  - kind: complex
+    complex_no: "614"
+    label: "미성맨션"
+  - kind: complex
+    complex_no: "8104"
+    label: "성수롯데캐슬파크"
+  - kind: complex
+    complex_no: "27424"
+    label: "서울숲힐스테이트"
+  - kind: complex
+    complex_no: "383"
+    label: "한양1차"
+  - kind: complex
+    complex_no: "982"
+    label: "청담현대3차"
+  - kind: complex
+    complex_no: "1081"
+    label: "청담자이"
+  - kind: complex
+    complex_no: "615"
+    label: "가락삼익맨숀"
+  - kind: complex
+    complex_no: "3431"
+    label: "송파삼성래미안"
+
+  # ── 과천시 ──
+  - kind: complex
+    complex_no: "22781"
+    label: "래미안슈르"
+  - kind: complex
+    complex_no: "120960"
+    label: "과천위버필드"
+  - kind: complex
+    complex_no: "121427"
+    label: "과천센트럴파크푸르지오써밋"
+  - kind: complex
+    complex_no: "112697"
+    label: "래미안과천센트럴스위트"
+  - kind: complex
+    complex_no: "125930"
+    label: "과천자이"
+  - kind: complex
+    complex_no: "127071"
+    label: "과천푸르지오써밋"
+  - kind: complex
+    complex_no: "22779"
+    label: "래미안에코팰리스"
+  - kind: complex
+    complex_no: "133573"
+    label: "과천푸르지오벨라르테"
+  - kind: complex
+    complex_no: "136750"
+    label: "과천푸르지오오르투스"
+  - kind: complex
+    complex_no: "136604"
+    label: "과천푸르지오라비엔오"
+  - kind: complex
+    complex_no: "136745"
+    label: "과천르센토데시앙"
+  - kind: complex
+    complex_no: "102625"
+    label: "동편마을4단지"
+  - kind: complex
+    complex_no: "1584"
+    label: "주공8단지"
+  - kind: complex
+    complex_no: "190357"
+    label: "프레스티어자이"
+  - kind: complex
+    complex_no: "1585"
+    label: "주공9단지"
+
+  # ── 동작구 ──
+  - kind: complex
+    complex_no: "109205"
+    label: "아크로타워스퀘어"
+  - kind: complex
+    complex_no: "110919"
+    label: "상도두산위브트레지움2차"
+  - kind: complex
+    complex_no: "117254"
+    label: "보라매SK뷰"
+  - kind: complex
+    complex_no: "117792"
+    label: "신길센트럴자이"
+  - kind: complex
+    complex_no: "131685"
+    label: "흑석자이"
+  - kind: complex
+    complex_no: "119377"
+    label: "힐스테이트클래시안"
+  - kind: complex
+    complex_no: "892"
+    label: "이촌코오롱"
+  - kind: complex
+    complex_no: "127384"
+    label: "이수푸르지오더프레티움"
+  - kind: complex
+    complex_no: "107424"
+    label: "래미안프레비뉴"
+  - kind: complex
+    complex_no: "22491"
+    label: "힐스테이트상도센트럴파크"
+  - kind: complex
+    complex_no: "114809"
+    label: "e편한세상서울대입구"
+  - kind: complex
+    complex_no: "9194"
+    label: "래미안상도3차"
+  - kind: complex
+    complex_no: "109434"
+    label: "래미안에스티움"
+  - kind: complex
+    complex_no: "867"
+    label: "한가람"
+  - kind: complex
+    complex_no: "148337"
+    label: "힐스테이트뉴포레"
+  - kind: complex
+    complex_no: "22789"
+    label: "상도더샵1차"
+  - kind: complex
+    complex_no: "120522"
+    label: "e편한세상영등포아델포레"
+  - kind: complex
+    complex_no: "128302"
+    label: "더샵파크프레스티지"
+  - kind: complex
+    complex_no: "1209"
+    label: "당산효성1차"
+  - kind: complex
+    complex_no: "3280"
+    label: "신동아리버파크"
+  - kind: complex
+    complex_no: "761"
+    label: "강촌"
+  - kind: complex
+    complex_no: "115936"
+    label: "사당롯데캐슬골든포레"
+  - kind: complex
+    complex_no: "374"
+    label: "극동"
+  - kind: complex
+    complex_no: "112997"
+    label: "롯데캐슬에듀포레"
+  - kind: complex
+    complex_no: "3457"
+    label: "영등포푸르지오"
+  - kind: complex
+    complex_no: "121788"
+    label: "신길파크자이"
+  - kind: complex
+    complex_no: "104035"
+    label: "이수힐스테이트"
+  - kind: complex
+    complex_no: "8753"
+    label: "상도아이파크"
+  - kind: complex
+    complex_no: "102641"
+    label: "흑석한강센트레빌2차"
+  - kind: complex
+    complex_no: "113097"
+    label: "e편한세상상도노빌리티"
+  - kind: complex
+    complex_no: "121987"
+    label: "당산센트럴아이파크"
+  - kind: complex
+    complex_no: "133962"
+    label: "상도역롯데캐슬파크엘"
+  - kind: complex
+    complex_no: "123898"
+    label: "보라매자이더포레스트"
+  - kind: complex
+    complex_no: "8348"
+    label: "당산푸르지오"
+  - kind: complex
+    complex_no: "10129"
+    label: "상도브라운스톤"
+  - kind: complex
+    complex_no: "378"
+    label: "신동아4차"
+  - kind: complex
+    complex_no: "2981"
+    label: "당산삼성래미안"
+  - kind: complex
+    complex_no: "170442"
+    label: "힐스테이트관악센트씨엘"
+  - kind: complex
+    complex_no: "104960"
+    label: "영등포아트자이"
+  - kind: complex
+    complex_no: "22846"
+    label: "힐스테이트상도프레스티지"
+  - kind: complex
+    complex_no: "100694"
+    label: "래미안트윈파크"
+  - kind: complex
+    complex_no: "401"
+    label: "한강현대"
+  - kind: complex
+    complex_no: "2982"
+    label: "강변래미안"
+  - kind: complex
+    complex_no: "101496"
+    label: "흑석한강푸르지오"
+  - kind: complex
+    complex_no: "762"
+    label: "대림"
+  - kind: complex
+    complex_no: "3803"
+    label: "리버힐삼성"
+  - kind: complex
+    complex_no: "767"
+    label: "한강대우"
+  - kind: complex
+    complex_no: "108126"
+    label: "e편한세상서울대입구2차"
+  - kind: complex
+    complex_no: "109124"
+    label: "상도파크자이"
+  - kind: complex
+    complex_no: "9311"
+    label: "삼성래미안"
+  - kind: complex
+    complex_no: "947"
+    label: "삼호1차"
+  - kind: complex
+    complex_no: "100304"
+    label: "흑석한강센트레빌1차"
+  - kind: complex
+    complex_no: "1224"
+    label: "북한강(성원)"
+  - kind: complex
+    complex_no: "380"
+    label: "사당우성2단지"
+  - kind: complex
+    complex_no: "375"
+    label: "대림"
+  - kind: complex
+    complex_no: "748"
+    label: "수정"
+  - kind: complex
+    complex_no: "102715"
+    label: "이수역리가"
+  - kind: complex
+    complex_no: "8987"
+    label: "상도중앙하이츠빌"
+  - kind: complex
+    complex_no: "161181"
+    label: "상도푸르지오클라베뉴"
+  - kind: complex
+    complex_no: "364"
+    label: "대방대림"
+  - kind: complex
+    complex_no: "968"
+    label: "그린"
+  - kind: complex
+    complex_no: "398"
+    label: "명수대현대"
+  - kind: complex
+    complex_no: "372"
+    label: "본동신동아"
+  - kind: complex
+    complex_no: "933"
+    label: "유원강변"
+  - kind: complex
+    complex_no: "111467"
+    label: "래미안로이파크"
+  - kind: complex
+    complex_no: "3452"
+    label: "문래자이"
+  - kind: complex
+    complex_no: "3561"
+    label: "성원"
+  - kind: complex
+    complex_no: "9208"
+    label: "롯데캐슬"
+  - kind: complex
+    complex_no: "3811"
+    label: "현대한강"
+  - kind: complex
+    complex_no: "391"
+    label: "우성1차"
+  - kind: complex
+    complex_no: "12473"
+    label: "보라매경남아너스빌"
+  - kind: complex
+    complex_no: "381"
+    label: "사당우성3단지"
+  - kind: complex
+    complex_no: "3386"
+    label: "보라매롯데낙천대"
+  - kind: complex
+    complex_no: "102142"
+    label: "두산위브트레지움"
+  - kind: complex
+    complex_no: "841"
+    label: "현대홈타운"
+  - kind: complex
+    complex_no: "115547"
+    label: "신길센트럴아이파크"
+  - kind: complex
+    complex_no: "11116"
+    label: "경남아너스빌"
+  - kind: complex
+    complex_no: "8872"
+    label: "쌍용스윗닷홈"
+  - kind: complex
+    complex_no: "471"
+    label: "방배우성"
+  - kind: complex
+    complex_no: "759"
+    label: "산호"
+  - kind: complex
+    complex_no: "9318"
+    label: "흑석동양"
+  - kind: complex
+    complex_no: "3383"
+    label: "상도래미안1차"
+  - kind: complex
+    complex_no: "362"
+    label: "우성"
+  - kind: complex
+    complex_no: "967"
+    label: "영등포삼환"
+  - kind: complex
+    complex_no: "1222"
+    label: "강변삼성스위트"
+  - kind: complex
+    complex_no: "25726"
+    label: "롯데캐슬헤론(주상복합)"
+  - kind: complex
+    complex_no: "464"
+    label: "방배현대1차"
+  - kind: complex
+    complex_no: "3381"
+    label: "대방e-편한세상1차"
+  - kind: complex
+    complex_no: "8388"
+    label: "보라매파크빌"
+  - kind: complex
+    complex_no: "405"
+    label: "도화3지구우성"
+  - kind: complex
+    complex_no: "27355"
+    label: "용산e-편한세상"
+  - kind: complex
+    complex_no: "9035"
+    label: "방배래미안"
+  - kind: complex
+    complex_no: "127725"
+    label: "이수스위첸포레힐즈"
+  - kind: complex
+    complex_no: "10786"
+    label: "용산파크자이(주상복합)"
+  - kind: complex
+    complex_no: "368"
+    label: "대방현대1차"
+  - kind: complex
+    complex_no: "188978"
+    label: "힐스테이트장승배기역"
+  - kind: complex
+    complex_no: "3034"
+    label: "두산"
+  - kind: complex
+    complex_no: "376"
+    label: "경남아너스빌"
+  - kind: complex
+    complex_no: "1211"
+    label: "동아에코빌"
+  - kind: complex
+    complex_no: "1148"
+    label: "마포쌍용황금"
+  - kind: complex
+    complex_no: "396"
+    label: "현대"
+  - kind: complex
+    complex_no: "25778"
+    label: "방배서리풀e-편한세상"
+  - kind: complex
+    complex_no: "100235"
+    label: "건영"
+  - kind: complex
+    complex_no: "719"
+    label: "삼환"
+  - kind: complex
+    complex_no: "9497"
+    label: "관악동부센트레빌"
+  - kind: complex
+    complex_no: "721"
+    label: "신길우성2차"
+  - kind: complex
+    complex_no: "11139"
+    label: "방배래미안타워"
+  - kind: complex
+    complex_no: "466"
+    label: "대우효령"
+  - kind: complex
+    complex_no: "3382"
+    label: "동작삼성래미안"
+  - kind: complex
+    complex_no: "752"
+    label: "진주"
+  - kind: complex
+    complex_no: "27576"
+    label: "보라매 e-편한세상"
+  - kind: complex
+    complex_no: "726"
+    label: "한성"
+  - kind: complex
+    complex_no: "13311"
+    label: "동작상떼빌"
+  - kind: complex
+    complex_no: "3346"
+    label: "방배현대홈타운2차"
+  - kind: complex
+    complex_no: "26399"
+    label: "사당휴먼시아"
+
+  # ── 서초구 ──
+  - kind: complex
+    complex_no: "105735"
+    label: "강남자곡힐스테이트"
+  - kind: complex
+    complex_no: "103577"
+    label: "서초힐스"
+  - kind: complex
+    complex_no: "132779"
+    label: "호반써밋서초파크"
+  - kind: complex
+    complex_no: "504"
+    label: "양재우성"
+  - kind: complex
+    complex_no: "112228"
+    label: "래미안블레스티지"
+  - kind: complex
+    complex_no: "118791"
+    label: "서초센트럴아이파크"
+  - kind: complex
+    complex_no: "3048"
+    label: "경남"
+  - kind: complex
+    complex_no: "490"
+    label: "우성5차"
+  - kind: complex
+    complex_no: "508"
+    label: "동고"
+  - kind: complex
+    complex_no: "104034"
+    label: "호반써밋서초파크뷰"
+  - kind: complex
+    complex_no: "108832"
+    label: "서초포레스타2단지"
+  - kind: complex
+    complex_no: "107902"
+    label: "서초포레스타3단지"
+  - kind: complex
+    complex_no: "107901"
+    label: "서초더샵포레"
+  - kind: complex
+    complex_no: "107903"
+    label: "서초포레스타5단지"
+  - kind: complex
+    complex_no: "105171"
+    label: "서초네이처힐3단지"
+  - kind: complex
+    complex_no: "134062"
+    label: "디에이치퍼스티어아이파크"
+  - kind: complex
+    complex_no: "103238"
+    label: "서초네이처힐4단지"
+  - kind: complex
+    complex_no: "103648"
+    label: "서초호반써밋"
+  - kind: complex
+    complex_no: "108834"
+    label: "서초포레스타6단지"
+  - kind: complex
+    complex_no: "509"
+    label: "코오롱"
+  - kind: complex
+    complex_no: "107069"
+    label: "서초포레스타7단지"
+  - kind: complex
+    complex_no: "840"
+    label: "현대"
+  - kind: complex
+    complex_no: "474"
+    label: "임광3차"
+  - kind: complex
+    complex_no: "115037"
+    label: "방배아트자이"
+  - kind: complex
+    complex_no: "363"
+    label: "도곡우성"
+  - kind: complex
+    complex_no: "472"
+    label: "임광1,2차"
+  - kind: complex
+    complex_no: "408"
+    label: "도곡한신"
+  - kind: complex
+    complex_no: "9218"
+    label: "아카데미스위트(주상복합)"
+  - kind: complex
+    complex_no: "974"
+    label: "대림아크로빌(주상복합)"
+  - kind: complex
+    complex_no: "18"
+    label: "논현신동아"
+  - kind: complex
+    complex_no: "25772"
+    label: "래미안서초스위트"
+  - kind: complex
+    complex_no: "105172"
+    label: "서초네이처힐6단지"
+
+  # ── 성동구 ──
+  - kind: complex
+    complex_no: "111396"
+    label: "동대문롯데캐슬노블레스"
+  - kind: complex
+    complex_no: "125441"
+    label: "청량리역한양수자인그라시엘(주상복합)"
+  - kind: complex
+    complex_no: "103797"
+    label: "래미안크레시티"
+  - kind: complex
+    complex_no: "109910"
+    label: "센트라스"
+  - kind: complex
+    complex_no: "127331"
+    label: "청량리역롯데캐슬SKY-L65(주상복합)"
+  - kind: complex
+    complex_no: "110935"
+    label: "힐스테이트청계"
+  - kind: complex
+    complex_no: "112339"
+    label: "래미안파크스위트"
+  - kind: complex
+    complex_no: "2977"
+    label: "서울숲한신더휴"
+  - kind: complex
+    complex_no: "107240"
+    label: "텐즈힐1"
+  - kind: complex
+    complex_no: "125111"
+    label: "e편한세상청계센트럴포레"
+  - kind: complex
+    complex_no: "104202"
+    label: "래미안위브"
+  - kind: complex
+    complex_no: "104190"
+    label: "텐즈힐2"
+  - kind: complex
+    complex_no: "103112"
+    label: "서울숲더샵(주상복합)"
+  - kind: complex
+    complex_no: "332"
+    label: "신동아"
+  - kind: complex
+    complex_no: "133184"
+    label: "래미안엘리니티"
+  - kind: complex
+    complex_no: "170797"
+    label: "청량리롯데캐슬하이루체"
+  - kind: complex
+    complex_no: "27044"
+    label: "서울숲행당푸르지오"
+  - kind: complex
+    complex_no: "111223"
+    label: "래미안미드카운티"
+  - kind: complex
+    complex_no: "26192"
+    label: "래미안허브리츠"
+  - kind: complex
+    complex_no: "125105"
+    label: "e편한세상광진그랜드파크"
+  - kind: complex
+    complex_no: "113059"
+    label: "답십리파크자이"
+  - kind: complex
+    complex_no: "180698"
+    label: "창경궁롯데캐슬시그니처"
+  - kind: complex
+    complex_no: "166821"
+    label: "e편한세상답십리아르테포레"
+  - kind: complex
+    complex_no: "573"
+    label: "청계벽산"
+  - kind: complex
+    complex_no: "100405"
+    label: "청계한신휴플러스"
+  - kind: complex
+    complex_no: "26215"
+    label: "두산위브"
+  - kind: complex
+    complex_no: "17426"
+    label: "두산위브"
+  - kind: complex
+    complex_no: "877"
+    label: "청계현대"
+  - kind: complex
+    complex_no: "549"
+    label: "세림"
+  - kind: complex
+    complex_no: "9124"
+    label: "왕십리금호어울림"
+  - kind: complex
+    complex_no: "349"
+    label: "미주"
+  - kind: complex
+    complex_no: "111258"
+    label: "서울숲리버뷰자이"
+  - kind: complex
+    complex_no: "575"
+    label: "서울숲삼부"
+  - kind: complex
+    complex_no: "127574"
+    label: "보문리슈빌하우트"
+  - kind: complex
+    complex_no: "174098"
+    label: "성동자이리버뷰"
+  - kind: complex
+    complex_no: "8545"
+    label: "한진해모로"
+  - kind: complex
+    complex_no: "109051"
+    label: "보문파크뷰자이"
+  - kind: complex
+    complex_no: "26918"
+    label: "래미안아름숲"
+  - kind: complex
+    complex_no: "574"
+    label: "한신무학"
+
+  # ── 송파구 ──
+  - kind: complex
+    complex_no: "104126"
+    label: "송파위례24단지꿈에그린"
+  - kind: complex
+    complex_no: "107662"
+    label: "위례그린파크푸르지오"
+  - kind: complex
+    complex_no: "107023"
+    label: "위례롯데캐슬"
+  - kind: complex
+    complex_no: "24721"
+    label: "광장현대파크빌10차"
+  - kind: complex
+    complex_no: "104122"
+    label: "송파더센트레"
+  - kind: complex
+    complex_no: "139917"
+    label: "포레나송파"
+  - kind: complex
+    complex_no: "74"
+    label: "광장현대3단지"
+  - kind: complex
+    complex_no: "127132"
+    label: "송파시그니처롯데캐슬"
+  - kind: complex
+    complex_no: "107715"
+    label: "위례래미안이편한세상"
+  - kind: complex
+    complex_no: "77"
+    label: "현대9단지"
+  - kind: complex
+    complex_no: "107807"
+    label: "힐스테이트송파위례"
+  - kind: complex
+    complex_no: "3118"
+    label: "선사현대"
+  - kind: complex
+    complex_no: "76"
+    label: "현대8단지"
+  - kind: complex
+    complex_no: "3116"
+    label: "삼성광나루"
+  - kind: complex
+    complex_no: "119875"
+    label: "e편한세상송파파크센트럴"
+  - kind: complex
+    complex_no: "19578"
+    label: "프라이어팰리스"
+  - kind: complex
+    complex_no: "109266"
+    label: "위례센트럴자이"
+  - kind: complex
+    complex_no: "81"
+    label: "구의현대2단지"
+  - kind: complex
+    complex_no: "108651"
+    label: "위례신도시신안인스빌아스트로"
+  - kind: complex
+    complex_no: "107924"
+    label: "위례더힐55"
+  - kind: complex
+    complex_no: "108789"
+    label: "위례호반써밋에비뉴"
+  - kind: complex
+    complex_no: "125354"
+    label: "힐스테이트센트럴위례"
+  - kind: complex
+    complex_no: "73"
+    label: "청구"
+  - kind: complex
+    complex_no: "84"
+    label: "현대프라임"
+  - kind: complex
+    complex_no: "125768"
+    label: "위례숲우미린"
+  - kind: complex
+    complex_no: "27212"
+    label: "둔촌푸르지오"
+  - kind: complex
+    complex_no: "107550"
+    label: "위례아이파크2차"
+  - kind: complex
+    complex_no: "122025"
+    label: "포웰시티푸르지오라포레"
+  - kind: complex
+    complex_no: "167997"
+    label: "더샵둔촌포레"
+  - kind: complex
+    complex_no: "107022"
+    label: "플로리체위례"
+  - kind: complex
+    complex_no: "122024"
+    label: "더샵포웰시티"
+  - kind: complex
+    complex_no: "67"
+    label: "극동2차"
+  - kind: complex
+    complex_no: "125022"
+    label: "힐스테이트포웰시티"
+  - kind: complex
+    complex_no: "107537"
+    label: "래미안강동팰리스(주상복합)"
+  - kind: complex
+    complex_no: "628"
+    label: "상아2차"
+  - kind: complex
+    complex_no: "80"
+    label: "광나루현대"
+  - kind: complex
+    complex_no: "110632"
+    label: "위례역푸르지오"
+  - kind: complex
+    complex_no: "109174"
+    label: "위례중앙푸르지오"
+  - kind: complex
+    complex_no: "107661"
+    label: "위례센트럴푸르지오"
+  - kind: complex
+    complex_no: "9682"
+    label: "강동현대홈타운"
+  - kind: complex
+    complex_no: "116836"
+    label: "힐스테이트강동리버뷰"
+  - kind: complex
+    complex_no: "118141"
+    label: "송파레미니스2단지"
+  - kind: complex
+    complex_no: "107339"
+    label: "위례아이파크"
+  - kind: complex
+    complex_no: "124942"
+    label: "위례포레자이"
+  - kind: complex
+    complex_no: "597"
+    label: "삼환가락"
+  - kind: complex
+    complex_no: "115046"
+    label: "잠실올림픽공원아이파크"
+  - kind: complex
+    complex_no: "79"
+    label: "강변우성"
+  - kind: complex
+    complex_no: "129426"
+    label: "위례중흥S-클래스"
+  - kind: complex
+    complex_no: "648"
+    label: "극동"
+  - kind: complex
+    complex_no: "125345"
+    label: "감일스타힐스"
+  - kind: complex
+    complex_no: "147185"
+    label: "송파더플래티넘"
+  - kind: complex
+    complex_no: "131899"
+    label: "감일수자인"
+  - kind: complex
+    complex_no: "643"
+    label: "동아한가람"
+  - kind: complex
+    complex_no: "650"
+    label: "한강극동"
+  - kind: complex
+    complex_no: "107958"
+    label: "위례센트로엘"
+  - kind: complex
+    complex_no: "1296"
+    label: "둔촌신성미소지움"
+  - kind: complex
+    complex_no: "625"
+    label: "현대리버빌2차"
+  - kind: complex
+    complex_no: "103"
+    label: "자양현대3차"
+  - kind: complex
+    complex_no: "107683"
+    label: "송파와이즈더샵"
+  - kind: complex
+    complex_no: "147845"
+    label: "위례호반써밋"
+  - kind: complex
+    complex_no: "115869"
+    label: "송파레미니스1단지"
+  - kind: complex
+    complex_no: "22809"
+    label: "래미안파크팰리스"
+  - kind: complex
+    complex_no: "173857"
+    label: "더샵강동센트럴시티"
+  - kind: complex
+    complex_no: "170718"
+    label: "산성역헤리스톤"
+  - kind: complex
+    complex_no: "422"
+    label: "현대리버빌1지구"
+  - kind: complex
+    complex_no: "180737"
+    label: "잠실래미안아이파크"
+  - kind: complex
+    complex_no: "115551"
+    label: "감일한라비발디"
+  - kind: complex
+    complex_no: "139920"
+    label: "송파레이크힐"
+  - kind: complex
+    complex_no: "136748"
+    label: "감일푸르지오마크베르(주상복합)"
+  - kind: complex
+    complex_no: "172684"
+    label: "그란츠리버파크"
+  - kind: complex
+    complex_no: "75"
+    label: "광장현대5단지"
+  - kind: complex
+    complex_no: "649"
+    label: "풍납현대"
+  - kind: complex
+    complex_no: "82"
+    label: "현대6단지"
+  - kind: complex
+    complex_no: "951"
+    label: "거여4단지"
+  - kind: complex
+    complex_no: "3335"
+    label: "광장신동아파밀리에"
+  - kind: complex
+    complex_no: "993"
+    label: "성내삼성"
+  - kind: complex
+    complex_no: "125937"
+    label: "e편한세상감일"
+  - kind: complex
+    complex_no: "109102"
+    label: "위례자이"
+  - kind: complex
+    complex_no: "107016"
+    label: "래미안위례"
+  - kind: complex
+    complex_no: "100514"
+    label: "광장힐스테이트"
+  - kind: complex
+    complex_no: "355"
+    label: "현대1차"
+  - kind: complex
+    complex_no: "609"
+    label: "문정시영"
+  - kind: complex
+    complex_no: "125346"
+    label: "감일파크센트레빌"
+  - kind: complex
+    complex_no: "175257"
+    label: "e편한세상강동프레스티지원"
+  - kind: complex
+    complex_no: "353"
+    label: "거여2단지효성,동아"
+  - kind: complex
+    complex_no: "1004"
+    label: "천호태영"
+  - kind: complex
+    complex_no: "3317"
+    label: "둔촌신동아(파밀리에)"
+  - kind: complex
+    complex_no: "102313"
+    label: "송파파크데일1단지"
+  - kind: complex
+    complex_no: "102314"
+    label: "송파파크데일2단지"
+  - kind: complex
+    complex_no: "107017"
+    label: "힐스테이트위례"
+  - kind: complex
+    complex_no: "996"
+    label: "한강현대"
+  - kind: complex
+    complex_no: "899"
+    label: "천호우성"
+  - kind: complex
+    complex_no: "357"
+    label: "현대3차"
+  - kind: complex
+    complex_no: "952"
+    label: "거여5단지"
+  - kind: complex
+    complex_no: "393"
+    label: "한신잠실코아"
+  - kind: complex
+    complex_no: "646"
+    label: "쌍용"
+  - kind: complex
+    complex_no: "141005"
+    label: "강동밀레니얼중흥S-클래스(주상복합)"
+  - kind: complex
+    complex_no: "109217"
+    label: "성내올림픽파크한양수자인"
+  - kind: complex
+    complex_no: "119358"
+    label: "감일센트레빌"
+  - kind: complex
+    complex_no: "352"
+    label: "거여1단지"
+  - kind: complex
+    complex_no: "131709"
+    label: "위례우미린"
+
+  # ── 용산구 ──
+  - kind: complex
+    complex_no: "110209"
+    label: "e편한세상신촌"
+  - kind: complex
+    complex_no: "122049"
+    label: "힐스테이트신촌"
+  - kind: complex
+    complex_no: "950"
+    label: "행당대림"
+  - kind: complex
+    complex_no: "878"
+    label: "행당한진타운"
+  - kind: complex
+    complex_no: "1147"
+    label: "대흥태영(마포태영)"
+  - kind: complex
+    complex_no: "104917"
+    label: "마포래미안푸르지오"
+  - kind: complex
+    complex_no: "106861"
+    label: "공덕자이"
+  - kind: complex
+    complex_no: "2992"
+    label: "신공덕삼성래미안1차"
+  - kind: complex
+    complex_no: "111249"
+    label: "마포자이더센트리지"
+  - kind: complex
+    complex_no: "110092"
+    label: "신촌푸르지오"
+  - kind: complex
+    complex_no: "110936"
+    label: "e편한세상금호파크힐스"
+  - kind: complex
+    complex_no: "107438"
+    label: "래미안웰스트림"
+  - kind: complex
+    complex_no: "3306"
+    label: "삼성래미안공덕2차"
+  - kind: complex
+    complex_no: "109250"
+    label: "서울역센트럴자이"
+  - kind: complex
+    complex_no: "110226"
+    label: "신금호파크자이"
+  - kind: complex
+    complex_no: "421"
+    label: "한강삼성"
+  - kind: complex
+    complex_no: "121608"
+    label: "마포프레스티지자이"
+  - kind: complex
+    complex_no: "148651"
+    label: "마포더클래시"
+  - kind: complex
+    complex_no: "111002"
+    label: "왕십리자이"
+  - kind: complex
+    complex_no: "13325"
+    label: "래미안공덕4차"
+  - kind: complex
+    complex_no: "3299"
+    label: "염리삼성래미안"
+  - kind: complex
+    complex_no: "2993"
+    label: "신공덕삼성래미안2차"
+  - kind: complex
+    complex_no: "114542"
+    label: "마포그랑자이"
+  - kind: complex
+    complex_no: "3459"
+    label: "도원삼성래미안"
+  - kind: complex
+    complex_no: "27820"
+    label: "래미안하이베르"
+  - kind: complex
+    complex_no: "110125"
+    label: "경희궁자이3단지"
+  - kind: complex
+    complex_no: "10133"
+    label: "래미안공덕3차"
+  - kind: complex
+    complex_no: "27666"
+    label: "효창파크푸르지오"
+  - kind: complex
+    complex_no: "114335"
+    label: "마포아이파크포레"
+  - kind: complex
+    complex_no: "102329"
+    label: "용산더프라임(주상복합)"
+  - kind: complex
+    complex_no: "114334"
+    label: "용산롯데캐슬센터포레"
+  - kind: complex
+    complex_no: "1151"
+    label: "서강GS"
+  - kind: complex
+    complex_no: "11420"
+    label: "서강해모로"
+  - kind: complex
+    complex_no: "11709"
+    label: "밤섬경남아너스빌"
+  - kind: complex
+    complex_no: "407"
+    label: "도화현대1차"
+  - kind: complex
+    complex_no: "2995"
+    label: "래미안"
+  - kind: complex
+    complex_no: "3441"
+    label: "태영"
+  - kind: complex
+    complex_no: "104596"
+    label: "래미안마포리버웰"
+  - kind: complex
+    complex_no: "3290"
+    label: "마포현대"
+  - kind: complex
+    complex_no: "2994"
+    label: "신공덕삼성래미안3차"
+  - kind: complex
+    complex_no: "3420"
+    label: "극동미라주"
+  - kind: complex
+    complex_no: "423"
+    label: "신촌럭키"
+  - kind: complex
+    complex_no: "403"
+    label: "공덕삼성"
+  - kind: complex
+    complex_no: "17081"
+    label: "서강쌍용예가"
+  - kind: complex
+    complex_no: "9168"
+    label: "왕십리풍림아이원"
+  - kind: complex
+    complex_no: "22776"
+    label: "한강밤섬자이"
+  - kind: complex
+    complex_no: "13845"
+    label: "신당푸르지오"
+  - kind: complex
+    complex_no: "27733"
+    label: "펜트라우스(주상복합)"
+  - kind: complex
+    complex_no: "118741"
+    label: "공덕SK리더스뷰(주상복합)"
+  - kind: complex
+    complex_no: "148187"
+    label: "힐스테이트세운센트럴2단지(주상복합)"
+  - kind: complex
+    complex_no: "100310"
+    label: "청구e편한세상"
+  - kind: complex
+    complex_no: "100627"
+    label: "래미안공덕5차"
+  - kind: complex
+    complex_no: "12240"
+    label: "마포한화오벨리스크(주상복합)"
+  - kind: complex
+    complex_no: "104791"
+    label: "래미안밤섬리베뉴I"
+  - kind: complex
+    complex_no: "846"
+    label: "창전삼성(창전래미안)"
+  - kind: complex
+    complex_no: "128102"
+    label: "용산데시앙포레"
+  - kind: complex
+    complex_no: "109379"
+    label: "경희궁자이2단지"
+  - kind: complex
+    complex_no: "1238"
+    label: "약수하이츠"
+  - kind: complex
+    complex_no: "404"
+    label: "삼성"
+  - kind: complex
+    complex_no: "108896"
+    label: "마포센트럴아이파크"
+  - kind: complex
+    complex_no: "1237"
+    label: "신당삼성"
+  - kind: complex
+    complex_no: "772"
+    label: "남산대림"
+  - kind: complex
+    complex_no: "940"
+    label: "독립문삼호"
+  - kind: complex
+    complex_no: "941"
+    label: "독립문극동"
+  - kind: complex
+    complex_no: "415"
+    label: "신촌삼익"
+  - kind: complex
+    complex_no: "104792"
+    label: "래미안밤섬리베뉴II"
+  - kind: complex
+    complex_no: "26046"
+    label: "돈의문센트레빌"
+  - kind: complex
+    complex_no: "22788"
+    label: "인왕산현대아이파크"
+  - kind: complex
+    complex_no: "22124"
+    label: "광화문스페이스본(주상복합)"
+  - kind: complex
+    complex_no: "195757"
+    label: "힐스테이트마포더퍼스트"
+  - kind: complex
+    complex_no: "8492"
+    label: "강변힐스테이트"
+  - kind: complex
+    complex_no: "105738"
+    label: "e편한세상마포리버파크"
+  - kind: complex
+    complex_no: "1235"
+    label: "무악현대"
