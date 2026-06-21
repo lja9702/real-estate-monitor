@@ -32,7 +32,7 @@ export function ListingsPage() {
     <div className="space-y-4">
       {/* 상단 고정 필터 바 — 스크롤해도 늘 보이도록 sticky. -mx-4 로 컨테이너 패딩까지
           덮어 바처럼 보이게 하고, 반투명 배경으로 아래 내용이 비쳐 보이게. */}
-      <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
         {domainsQuery.data ? (
           <ListingFilterPanel
             domains={domainsQuery.data}
@@ -45,18 +45,17 @@ export function ListingsPage() {
         ) : (
           <div className="text-sm text-muted-foreground">필터 로딩 중…</div>
         )}
-      </div>
-
-      {/* 전체폭 테이블 — 사이드바를 상단 바로 옮겨 가로 스크롤 없이 표시. */}
-      <div className="min-w-0 space-y-3">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="mt-2 flex items-center gap-3 border-t pt-2 text-sm text-muted-foreground">
           <span>
             총 <b className="text-foreground">{data?.total ?? 0}</b>건
           </span>
           {!!data?.new_count && <span>· 신규 {data.new_count}건</span>}
           {listingsQuery.isFetching && <span>· 불러오는 중…</span>}
         </div>
+      </div>
 
+      {/* 전체폭 테이블 */}
+      <div className="min-w-0">
         {listingsQuery.isError ? (
           <p className="rounded-lg border border-destructive/50 p-8 text-center text-sm text-destructive">
             불러오기 실패: {String(listingsQuery.error)}
