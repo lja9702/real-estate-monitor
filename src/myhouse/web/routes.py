@@ -251,11 +251,8 @@ def set_memo(
 
 # ── 지도 ───────────────────────────────────────────────────────────────────
 @router.get("/map")
-def map_view(request: Request):
-    s = getattr(request.app.state, "settings", None)
-    naver_key = (s.naver_map_client_id or "") if s else ""
-    ctx = {"request": request, "title": "지도", "naver_map_key": naver_key}
-    return _tpl(request).TemplateResponse(request, "map.html", ctx)
+def map_view():
+    return RedirectResponse("/app/map", status_code=302)
 
 
 @router.get("/api/map-data")
@@ -265,6 +262,12 @@ def map_data(
 ):
     rows = get_map_complexes(session, _last_run_id(session))
     return [dataclasses.asdict(r) for r in rows]
+
+
+@router.get("/api/config")
+def api_config(request: Request):
+    s = getattr(request.app.state, "settings", None)
+    return {"naver_map_client_id": (s.naver_map_client_id or None) if s else None}
 
 
 # ── JSON API ──────────────────────────────────────────────────────────────
