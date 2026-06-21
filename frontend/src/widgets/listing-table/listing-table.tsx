@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import {
   Table,
   TableBody,
@@ -61,11 +62,9 @@ export function ListingTable({ rows }: { rows: ListingRow[] }) {
               </TableCell>
               <TableCell>
                 <div className="font-medium">
-                  {/* 단지명 → 내부 상세페이지(/complex/{no}). 현재는 Jinja 페이지라
-                      전체 네비게이션(SPA 이탈). 단계4+ 에서 React 라우트로 전환 예정. */}
-                  <a href={`/complex/${r.complex_no}`} className="hover:underline">
+                  <Link to={`/complex/${r.complex_no}`} className="hover:underline">
                     {r.complex_name}
-                  </a>
+                  </Link>
                   {r.rep_article_url && (
                     <a
                       href={r.rep_article_url}

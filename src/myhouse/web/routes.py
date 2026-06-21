@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlmodel import Session
 
 from ..constants import SOURCE_WEB
@@ -230,23 +230,8 @@ def permits(
 
 
 @router.get("/complex/{complex_no}")
-def complex_detail(
-    complex_no: str,
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    stat = complex_stats(session, complex_no)
-    f = Filters(complex_no=complex_no, status="all", sort="price_asc")
-    rows = build_cluster_rows(session, f, _last_run_id(session))
-    deal_rows = recent_deals_for_complex(session, complex_no, _last_deal_run_id(session))
-    ctx = {
-        "request": request,
-        "stat": stat,
-        "rows": rows,
-        "deal_rows": deal_rows,
-        "title": stat.name,
-    }
-    return _tpl(request).TemplateResponse(request, "complex_detail.html", ctx)
+def complex_detail(complex_no: str):
+    return RedirectResponse(f"/app/complex/{complex_no}", status_code=302)
 
 
 @router.get("/listing/{cluster_key}/history")
@@ -360,6 +345,19 @@ def api_filter_domains(session: Session = Depends(get_session_dep)):
 def api_listing_history(cluster_key: str, session: Session = Depends(get_session_dep)):
     pts = price_history(session, cluster_key)
     return {"points": [dataclasses.asdict(p) for p in pts], "spark": sparkline(pts)}
+
+
+@router.get("/api/complex/{complex_no}")
+def api_complex_detail(complex_no: str, session: Session = Depends(get_session_dep)):
+    stat = complex_stats(session, complex_no)
+    f = Filters(complex_no=complex_no, status="all", sort="price_asc")
+    rows = build_cluster_rows(session, f, _last_run_id(session))
+    deals = recent_deals_for_complex(session, complex_no, _last_deal_run_id(session))
+    return {
+        "stat": dataclasses.asdict(stat),
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "deals": [dataclasses.asdict(d) for d in deals],
+    }
 
 
 # ── 지금 수집 ──────────────────────────────────────────────────────────────
