@@ -29,9 +29,10 @@ export function ListingsPage() {
   const data = listingsQuery.data
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[320px_1fr] lg:items-start">
-      {/* 좌측 필터 — 스크롤 시 따라오도록 sticky. 패널이 뷰포트보다 길면 내부 스크롤. */}
-      <div className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+    <div className="space-y-4">
+      {/* 상단 고정 필터 바 — 스크롤해도 늘 보이도록 sticky. -mx-4 로 컨테이너 패딩까지
+          덮어 바처럼 보이게 하고, 반투명 배경으로 아래 내용이 비쳐 보이게. */}
+      <div className="sticky top-0 z-20 -mx-4 border-b bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/75">
         {domainsQuery.data ? (
           <ListingFilterPanel
             domains={domainsQuery.data}
@@ -42,15 +43,12 @@ export function ListingsPage() {
             guDongMap={data?.gu_dong_map ?? {}}
           />
         ) : (
-          <div className="rounded-lg border p-4 text-sm text-muted-foreground">
-            필터 로딩 중…
-          </div>
+          <div className="text-sm text-muted-foreground">필터 로딩 중…</div>
         )}
       </div>
 
-      {/* min-w-0: 1fr 트랙이 넓은 테이블 내용폭으로 부풀어 grid 가 가로 오버플로되는 것 방지.
-          넘치면 테이블 내부(overflow-x-auto)에서 스크롤. */}
-      <div className="space-y-3 min-w-0">
+      {/* 전체폭 테이블 — 사이드바를 상단 바로 옮겨 가로 스크롤 없이 표시. */}
+      <div className="min-w-0 space-y-3">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span>
             총 <b className="text-foreground">{data?.total ?? 0}</b>건

@@ -9,6 +9,7 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { RangeSlider, MinSlider } from '@/shared/ui/range-slider'
 import { formatManwon, formatArea } from '@/shared/lib/format'
 import { debounce } from '@/shared/lib/debounce'
@@ -38,15 +39,17 @@ function FilterSelect({
   options,
   onChange,
   disabled,
+  className,
 }: {
   label: string
   value: string
   options: readonly SelectOption[]
   onChange: (v: string) => void
   disabled?: boolean
+  className?: string
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className={cn('space-y-1.5', className)}>
       <label className="text-xs font-medium text-muted-foreground">{label}</label>
       <Select
         value={value || ALL}
@@ -138,25 +141,29 @@ export function ListingFilterPanel({
   ]
 
   return (
-    <aside className="space-y-5 rounded-lg border bg-card p-4">
-      <div className="grid grid-cols-2 gap-3">
+    <div className="space-y-3">
+      {/* 컴팩트 컨트롤 — 셀렉트·검색·정렬·토글·초기화 (좁으면 자동 줄바꿈) */}
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
         <FilterSelect
           label="거래유형"
           value={filters.trade_type}
           options={TRADE_TYPES}
           onChange={(v) => setFilters({ trade_type: v })}
+          className="w-24"
         />
         <FilterSelect
           label="상태"
           value={filters.status}
           options={STATUS_OPTIONS}
           onChange={(v) => setFilters({ status: v })}
+          className="w-24"
         />
         <FilterSelect
           label="구"
           value={filters.gu}
           options={guOptions}
           onChange={(v) => setFilters({ gu: v, dong: '' })}
+          className="w-28"
         />
         <FilterSelect
           label="동"
@@ -164,29 +171,56 @@ export function ListingFilterPanel({
           options={dongOptions}
           onChange={(v) => setFilters({ dong: v })}
           disabled={!filters.gu}
+          className="w-28"
         />
+        <FilterSelect
+          label="단지"
+          value={filters.complex_no}
+          options={complexOptions}
+          onChange={(v) => setFilters({ complex_no: v })}
+          className="w-44"
+        />
+        <div className="w-52 space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">검색</label>
+          <Input
+            placeholder="단지명·향·특징…"
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value)
+              commitQ(e.target.value)
+            }}
+          />
+        </div>
+        <FilterSelect
+          label="정렬"
+          value={filters.sort}
+          options={SORT_OPTIONS}
+          onChange={(v) => setFilters({ sort: v })}
+          className="w-28"
+        />
+        <div className="flex items-center gap-3 pb-2">
+          <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+            <Checkbox
+              checked={filters.starred_only}
+              onCheckedChange={(c) => setFilters({ starred_only: c === true })}
+            />
+            관심만
+          </label>
+          <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+            <Checkbox
+              checked={filters.show_excluded}
+              onCheckedChange={(c) => setFilters({ show_excluded: c === true })}
+            />
+            제외 포함
+          </label>
+        </div>
+        <Button variant="outline" size="sm" className="mb-0.5" onClick={reset}>
+          초기화
+        </Button>
       </div>
 
-      <FilterSelect
-        label="단지"
-        value={filters.complex_no}
-        options={complexOptions}
-        onChange={(v) => setFilters({ complex_no: v })}
-      />
-
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-muted-foreground">검색</label>
-        <Input
-          placeholder="단지명·향·특징…"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value)
-            commitQ(e.target.value)
-          }}
-        />
-      </div>
-
-      <div className="space-y-4 border-t pt-4">
+      {/* 슬라이더 — 가격·전용·세대수·준공·층 (넓으면 한 줄, 좁으면 줄바꿈) */}
+      <div className="grid grid-cols-1 gap-x-6 gap-y-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <RangeSlider
           label="가격"
           min={domains.price_min}
@@ -253,35 +287,6 @@ export function ListingFilterPanel({
           onCommit={(v) => setFilters({ floor_min: v <= 1 ? null : v })}
         />
       </div>
-
-      <div className="flex items-center gap-4 border-t pt-4">
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox
-            checked={filters.starred_only}
-            onCheckedChange={(c) => setFilters({ starred_only: c === true })}
-          />
-          관심만
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox
-            checked={filters.show_excluded}
-            onCheckedChange={(c) => setFilters({ show_excluded: c === true })}
-          />
-          제외 포함
-        </label>
-      </div>
-
-      <div className="flex items-center justify-between gap-3 border-t pt-4">
-        <FilterSelect
-          label="정렬"
-          value={filters.sort}
-          options={SORT_OPTIONS}
-          onChange={(v) => setFilters({ sort: v })}
-        />
-        <Button variant="outline" size="sm" className="mt-5" onClick={reset}>
-          초기화
-        </Button>
-      </div>
-    </aside>
+    </div>
   )
 }
