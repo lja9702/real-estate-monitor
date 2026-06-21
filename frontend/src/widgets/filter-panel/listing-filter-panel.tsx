@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { RangeSlider, MinSlider } from '@/shared/ui/range-slider'
-import { formatManwon, formatArea } from '@/shared/lib/format'
+import { formatManwon, formatAreaWithPyeong } from '@/shared/lib/format'
 import { debounce } from '@/shared/lib/debounce'
 import {
   SLIDER_STEP,
@@ -241,7 +241,7 @@ export function ListingFilterPanel({
           max={areaMax}
           step={SLIDER_STEP.area}
           value={areaValue}
-          format={formatArea}
+          format={formatAreaWithPyeong}
           onCommit={([lo, hi]) =>
             setFilters({
               area_min: lo <= areaMin ? null : lo,

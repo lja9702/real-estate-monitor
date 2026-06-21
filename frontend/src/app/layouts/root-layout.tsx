@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { apiPostForm } from '@/shared/api/client'
 
@@ -15,27 +15,50 @@ const NAV_LINKS: Array<{ to: string; label: string; end?: true }> = [
 function RunButton({ label, endpoint }: { label: string; endpoint: string }) {
   const navigate = useNavigate()
   const [running, setRunning] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   async function trigger() {
     if (running) return
     setRunning(true)
     try {
       await apiPostForm(endpoint)
-      setTimeout(() => { void navigate('/runs') }, 1800)
+      timer.current = setTimeout(() => { void navigate('/runs') }, 1800)
     } catch {
       setRunning(false)
     }
   }
 
+  async function cancel() {
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    try {
+      await apiPostForm('/run-cancel')
+    } catch { /* 취소 오류는 무시 */ }
+    setRunning(false)
+  }
+
   return (
-    <button
-      type="button"
-      onClick={() => { void trigger() }}
-      disabled={running}
-      className="h-7 rounded border px-2.5 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
-    >
-      {running ? '시작됨…' : label}
-    </button>
+    <span className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => { void trigger() }}
+        disabled={running}
+        className="h-7 rounded border px-2.5 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+      >
+        {running ? '시작됨…' : label}
+      </button>
+      {running && (
+        <button
+          type="button"
+          onClick={() => { void cancel() }}
+          className="h-7 rounded border border-destructive/40 px-2 text-xs text-destructive hover:bg-destructive/10"
+        >
+          취소
+        </button>
+      )}
+    </span>
   )
 }
 

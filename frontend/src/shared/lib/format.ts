@@ -28,6 +28,13 @@ export function formatArea(m2: number | null | undefined): string {
   return Number.isInteger(m2) ? `${m2}㎡` : `${m2.toFixed(1)}㎡`
 }
 
+// 전용면적 ㎡ + 평 병기 (슬라이더 레이블·필터 버튼용). 1평 ≈ 3.305785㎡
+export function formatAreaWithPyeong(m2: number | null | undefined): string {
+  if (m2 == null) return '-'
+  const m2Str = Number.isInteger(m2) ? `${m2}㎡` : `${m2.toFixed(1)}㎡`
+  return `${m2Str} (${Math.round(m2 / 3.305785)}평)`
+}
+
 // 'YYYYMMDD' → 연도 정수. 준공연도 표시용.
 export function approveYear(ymd: string | null | undefined): number | null {
   if (!ymd || ymd.length < 4) return null

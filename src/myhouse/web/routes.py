@@ -405,6 +405,20 @@ def run_permits_now():
     return {"started": True}
 
 
+@router.post("/run-cancel")
+def run_cancel():
+    """실행 중인 수집 프로세스(collect·collect-deals·collect-permits)를 모두 종료."""
+    try:
+        result = subprocess.run(
+            ["pkill", "-f", "myhouse.cli collect"],
+            capture_output=True,
+        )
+        # pkill: 0 = 프로세스 종료됨, 1 = 매칭 없음
+        return {"cancelled": result.returncode == 0}
+    except OSError as e:
+        return JSONResponse({"cancelled": False, "error": str(e)}, status_code=500)
+
+
 # ── 추적 단지 추가/제거 (JSON 응답) ──────────────────────────────────────────
 def _spawn_add_collect(complex_no: str, alias: str | None) -> bool:
     """추가한 단지 1건을 즉시 수집(백그라운드 서브프로세스). 텔레그램 /add 와 동일한 경로."""

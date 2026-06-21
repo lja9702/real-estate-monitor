@@ -108,7 +108,8 @@ export function MapPage() {
           <div style="position:relative;padding:12px 30px 10px 14px;min-width:170px;font-size:.9em;line-height:1.6">
             <a href="javascript:void(0)" onclick="window.__mapClose&&window.__mapClose()"
                style="position:absolute;top:6px;right:8px;color:#bbb;font-size:1.15em;font-weight:bold;text-decoration:none;line-height:1">✕</a>
-            <b>${esc(d.name)}</b><br>
+            <a href="https://new.land.naver.com/complexes/${esc(d.complex_no)}" target="_blank" rel="noopener"
+               style="font-weight:bold;color:#03c75a;text-decoration:none">${esc(d.name)} ↗</a><br>
             ${d.meta_line ? `<span style="color:#aaa;font-size:.8em">${esc(d.meta_line)}</span><br>` : ''}
             <span style="color:#888">${esc(trades)}</span><br>
             활성 매물: <b>${d.active_count}건</b>${newBadge}<br>
