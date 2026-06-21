@@ -36,4 +36,11 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     app.include_router(router)
+
+    # React SPA (/app) — Vite 빌드 산출물. include_router 뒤에 마운트해야 /api/* 가
+    # SPA catch-all 에 먹히지 않는다. dist 가 없으면(빌드 전) 조용히 건너뛴다.
+    dist = WEB_DIR / "dist"
+    if dist.exists():
+        app.mount("/app", StaticFiles(directory=str(dist), html=True), name="spa")
+
     return app

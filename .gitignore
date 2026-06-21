@@ -23,5 +23,10 @@ logs/
 # Claude Code (machine-local settings)
 .claude/settings.local.json
 
+# frontend (React SPA — node_modules + Vite 빌드 산출물)
+node_modules/
+frontend/.vite/
+src/myhouse/web/dist/
+
 # macOS
 .DS_Store
