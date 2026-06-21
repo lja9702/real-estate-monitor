@@ -322,9 +322,9 @@ def test_band_invalid_shows_usage(engine, tmp_path):
 
 # ── 유저별 단지 구독(/list·/add·/as) ─────────────────────────────────────────
 def _ctx_op(engine, tmp_path, chat_id="555") -> BotContext:
-    """운영자(allowlist) 컨텍스트 — 단지 제한 없이 전체를 본다."""
+    """운영자 컨텍스트 — TELEGRAM_CHAT_ID 로 판정, .env 격리."""
     ctx = _ctx(engine, tmp_path)
-    ctx.settings = Settings(telegram_allowlist=chat_id)
+    ctx.settings = Settings(_env_file=None, telegram_chat_id=chat_id)
     ctx.chat_id = chat_id
     return ctx
 
@@ -380,7 +380,7 @@ def test_build_personalized_operator_vs_user(engine, tmp_path):
         repo.subscribe(s, "555")  # 운영자
         repo.subscribe(s, "777")  # 일반
         repo.add_subscription(s, "777", "tel1")
-    settings = Settings(telegram_allowlist="555")
+    settings = Settings(_env_file=None, telegram_chat_id="555")
     plans = dict(
         telegram.build_personalized(
             engine,
