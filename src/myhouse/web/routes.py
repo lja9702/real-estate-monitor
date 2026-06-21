@@ -180,13 +180,8 @@ def index(
 
 
 @router.get("/shortlist")
-def shortlist(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    rows = list_starred_complex_rows(session, _last_run_id(session))
-    ctx = {"request": request, "rows": rows, "title": "관심 단지"}
-    return _tpl(request).TemplateResponse(request, "shortlist.html", ctx)
+def shortlist():
+    return RedirectResponse("/app/shortlist", status_code=302)
 
 
 @router.get("/deals")
@@ -251,27 +246,13 @@ def listing_history(
 
 
 @router.get("/runs")
-def runs(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    ctx = {"request": request, "runs": recent_runs(session), "title": "실행 로그"}
-    return _tpl(request).TemplateResponse(request, "runs.html", ctx)
+def runs():
+    return RedirectResponse("/app/runs", status_code=302)
 
 
 @router.get("/complexes")
-def complexes_page(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    rows = list_tracking_rows(session)
-    ctx = {
-        "request": request,
-        "tracked": [r for r in rows if r.is_active],
-        "untracked": [r for r in rows if not r.is_active],
-        "title": "추적 단지",
-    }
-    return _tpl(request).TemplateResponse(request, "complexes.html", ctx)
+def complexes_page():
+    return RedirectResponse("/app/complexes", status_code=302)
 
 
 # ── 큐레이션 (JSON 응답, JS 로 즉시 반영) ─────────────────────────────────
@@ -358,6 +339,24 @@ def api_complex_detail(complex_no: str, session: Session = Depends(get_session_d
         "rows": [dataclasses.asdict(r) for r in rows],
         "deals": [dataclasses.asdict(d) for d in deals],
     }
+
+
+@router.get("/api/runs")
+def api_runs(session: Session = Depends(get_session_dep)):
+    runs = recent_runs(session)
+    return {"runs": [{**r.model_dump(), "status": r.status.value} for r in runs]}
+
+
+@router.get("/api/shortlist")
+def api_shortlist(session: Session = Depends(get_session_dep)):
+    rows = list_starred_complex_rows(session, _last_run_id(session))
+    return {"rows": [dataclasses.asdict(r) for r in rows]}
+
+
+@router.get("/api/complexes")
+def api_complexes(session: Session = Depends(get_session_dep)):
+    rows = list_tracking_rows(session)
+    return {"rows": [dataclasses.asdict(r) for r in rows]}
 
 
 # ── 지금 수집 ──────────────────────────────────────────────────────────────

@@ -67,3 +67,26 @@ export interface ComplexDetailResponse {
   rows: ComplexRow[]
   deals: DealRow[]
 }
+
+export interface StarredComplexRow {
+  complex_no: string
+  name: string
+  address_short: string | null
+  meta_line: string | null
+  is_active: boolean
+  active_count: number
+  sale_min: number | null
+  sale_max: number | null
+  new_count: number
+}
+
+export interface TrackingRow {
+  complex_no: string
+  name: string
+  source: string
+  source_ko: string
+  is_active: boolean
+  address_short: string | null
+  meta_line: string | null
+  active_count: number
+}
