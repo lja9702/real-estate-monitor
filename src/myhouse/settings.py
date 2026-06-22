@@ -131,10 +131,11 @@ class DealsConfig(BaseModel):
 
 
 class PermitsConfig(BaseModel):
-    """토지거래허가(서울시 land.seoul.go.kr) 수집 설정.
+    """토지거래허가(서울 land.seoul.go.kr · 과천 gccity.go.kr) 수집 설정.
 
     실거래의 *선행* 신호(거래 완료 전 허가). 응답에 가격·면적이 없어 '단지에서 허가 N건'
-    수준으로만 쓴다. 추적단지가 있는 서울 자치구만 조회하고, 지번이 매칭된 단지만 알린다.
+    수준으로만 쓴다. 추적단지가 있는 서울 전역(25개 자치구)·과천 시군구만 조회하고, 지번이
+    매칭된 단지만 알린다. 경기 성남·용인 등은 처리내역 공개 형식이 제각각이라 미지원(skip).
     """
 
     enabled: bool = True

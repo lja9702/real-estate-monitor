@@ -388,7 +388,7 @@ def format_permits_reply(
         return (
             f"🏛 <b>토지거래허가</b> {scope}\n"
             f"최근 {months}개월 내 허가 내역이 없습니다.\n"
-            "<i>※ 서울 토지거래허가구역(강남3구·용산 등) 단지만 집계됩니다.</i>"
+            "<i>※ 서울 전역(25개 자치구)·경기 과천 토지거래허가구역 단지만 집계됩니다.</i>"
         )
 
     scope = f"<b>{escape(name or complex_no or '전체')}</b>" if (name or complex_no) else "전체 단지"
