@@ -1,4 +1,4 @@
-"""급매 대시보드 스모크 — /api/flash JSON·필터·/flash 리다이렉트."""
+"""급매 대시보드 스모크 — /api/flash JSON·필터·/flash SPA 셸."""
 
 from __future__ import annotations
 
@@ -93,8 +93,8 @@ def test_api_flash_filters(tmp_path):
         assert client.get("/api/flash" + qs).status_code == 200
 
 
-def test_flash_route_redirects_to_spa(tmp_path):
+def test_flash_route_serves_spa_shell(tmp_path):
     client = TestClient(create_app(str(_seed(tmp_path))))
-    r = client.get("/flash", follow_redirects=False)
-    assert r.status_code == 302
-    assert r.headers["location"] == "/app/flash"
+    r = client.get("/flash")
+    assert r.status_code == 200
+    assert 'id="root"' in r.text  # SPA 셸(클라이언트 라우팅)

@@ -45,27 +45,24 @@
 ## 3. 테스트 상태
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q     # 238 passed, 5 failed
-cd frontend && npx vitest run
+PYTHONPATH=. .venv/bin/python -m pytest -q     # 330 passed
+cd frontend && npx vitest run                  # 19 passed
 ```
 
-**실패 5개는 전부 단계 6의 "HTML 테스트 재작성" 항목** — 회귀 아님, 예상됨:
-- `test_web.py::test_dashboard_smoke`, `test_complex_detail_shows_meta`
-- `test_web_complexes.py::test_complexes_page_lists_tracked`
-- `test_web_deals.py::test_deals_page_smoke`, `test_complex_detail_has_deal_section`
-
-원인: 해당 Jinja 라우트가 `/app/*` 302 리다이렉트로 바뀌어 `'…' in r.text`(서버렌더 HTML 단언)가 깨짐. 단계 6에서 JSON API 검증으로 재작성하면 해소.
+전부 그린. 단계 6 정리 후 웹 스모크 테스트는 모두 JSON API/SPA 셸 기준으로 재작성됨.
 
 ---
 
-## 4. 단계 6 — 정리 (남은 작업)
+## 4. 단계 6 — 정리 (✅ 완료)
 
-| 항목 | 내용 |
+| 항목 | 상태 |
 |---|---|
-| Jinja 라우트 삭제 | `routes.py` 리다이렉트 라우트, `templates/*.html`, 구 `app.js`/`app.css` |
-| SPA를 `/`로 승격 | `app.py` `/app`→`/` 마운트, basename 변경(`vite.config.ts` + `router.tsx`) |
-| HTML 테스트 재작성 | 위 실패 5개 → JSON 응답 검증으로 전환 |
-| 빌드 단계 추가 | `install_launchd.sh`에 `npm ci && npm run build` |
+| Jinja 라우트 삭제 | ✅ `routes.py` 페이지/리다이렉트 라우트·`_tpl`·`templates/`·`static/`(app.js·app.css) 제거 |
+| SPA를 `/`로 승격 | ✅ `app.py` SPA 마운트 `/app`→`/`(include_router 뒤), `vite.config.ts` base `/`, `router.tsx` basename 기본값 |
+| HTML 테스트 재작성 | ✅ `test_web*.py` 전부 JSON API/SPA 셸 단언으로 전환 |
+| 빌드 단계 추가 | ✅ `install_launchd.sh` 에 nvm 소싱 + `npm ci && npm run build`(dist 는 .gitignore) |
+
+> 잔여: `/api/listing/{ck}/history` 등 JSON API 만 사용. 구 Jinja 파셜 라우트(`/listing/.../history`)는 제거됨.
 
 ---
 

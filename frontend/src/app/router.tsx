@@ -11,25 +11,22 @@ import { AuctionsPage } from '@/pages/auctions'
 import { FlashPage } from '@/pages/flash'
 import { MapPage } from '@/pages/map'
 
-// SPA 는 /app/ 에 마운트되므로 basename 으로 라우터 베이스를 맞춘다(vite base 와 동일).
-export const router = createBrowserRouter(
-  [
-    {
-      path: '/',
-      element: <RootLayout />,
-      children: [
-        { index: true, element: <ListingsPage /> },
-        { path: 'complex/:no', element: <ComplexDetailPage /> },
-        { path: 'runs', element: <RunsPage /> },
-        { path: 'shortlist', element: <ShortlistPage /> },
-        { path: 'complexes', element: <ComplexesPage /> },
-        { path: 'deals', element: <DealsPage /> },
-        { path: 'permits', element: <PermitsPage /> },
-        { path: 'auctions', element: <AuctionsPage /> },
-        { path: 'flash', element: <FlashPage /> },
-        { path: 'map', element: <MapPage /> },
-      ],
-    },
-  ],
-  { basename: '/app' },
-)
+// SPA 는 루트(/)에 마운트된다(단계 6 완료: /app→/ 승격) — basename 기본값('/').
+export const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <RootLayout />,
+    children: [
+      { index: true, element: <ListingsPage /> },
+      { path: 'complex/:no', element: <ComplexDetailPage /> },
+      { path: 'runs', element: <RunsPage /> },
+      { path: 'shortlist', element: <ShortlistPage /> },
+      { path: 'complexes', element: <ComplexesPage /> },
+      { path: 'deals', element: <DealsPage /> },
+      { path: 'permits', element: <PermitsPage /> },
+      { path: 'auctions', element: <AuctionsPage /> },
+      { path: 'flash', element: <FlashPage /> },
+      { path: 'map', element: <MapPage /> },
+    ],
+  },
+])

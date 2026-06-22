@@ -114,7 +114,7 @@ export function MapPage() {
             <span style="color:#888">${esc(trades)}</span><br>
             활성 매물: <b>${d.active_count}건</b>${newBadge}<br>
             가격: ${priceStr}<br>
-            <a href="/app/complex/${esc(d.complex_no)}" style="font-size:.85em;color:#4fa3e0">단지 보기 →</a>
+            <a href="/complex/${esc(d.complex_no)}" style="font-size:.85em;color:#4fa3e0">단지 보기 →</a>
           </div>`)
         iw.open(map, m as unknown as object)
       })

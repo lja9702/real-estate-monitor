@@ -3,11 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
-// SPA 는 /app/ 경로에 마운트되어 기존 Jinja SSR 과 공존한다(단계 6 에서 / 로 승격).
+// SPA 는 루트(/)에 마운트된다(단계 6 완료: /app→/ 승격).
 // 빌드 산출물은 FastAPI 가 StaticFiles 로 서빙하는 ../src/myhouse/web/dist 로 보낸다.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: '/app/',
+  base: '/',
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
@@ -24,7 +24,6 @@ export default defineConfig({
       '/curation': 'http://127.0.0.1:8765',
       '/complexes': 'http://127.0.0.1:8765',
       '/run': 'http://127.0.0.1:8765',
-      '/static': 'http://127.0.0.1:8765',
     },
   },
 })
