@@ -31,6 +31,22 @@ if [[ ! -x "$PYTHON" ]]; then
   exit 1
 fi
 
+# 프론트엔드(React SPA) 빌드 → src/myhouse/web/dist (FastAPI 가 루트 / 에 서빙).
+# dist 는 .gitignore 대상이라 배포 시 매번 새로 빌드한다.
+FRONTEND="$PROJECT/frontend"
+if [[ -d "$FRONTEND" ]]; then
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+  # shellcheck disable=SC1091
+  [[ -s "$NVM_DIR/nvm.sh" ]] && \. "$NVM_DIR/nvm.sh"
+  if command -v npm >/dev/null 2>&1; then
+    echo "📦 프론트엔드 빌드…"
+    ( cd "$FRONTEND" && npm ci && npm run build )
+  else
+    echo "⚠ npm 을 찾지 못해 SPA 빌드를 건너뜁니다 — 대시보드 / 가 비어 보일 수 있습니다."
+    echo "  Node 설치 후 수동 빌드: (cd frontend && npm ci && npm run build)"
+  fi
+fi
+
 # 프로파일별 설정
 if [[ "$PROFILE" == "main" ]]; then
   LABEL_PREFIX="com.myhouse"

@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from sqlmodel import Session
 
 from ..constants import SOURCE_WEB
@@ -202,89 +202,6 @@ def get_flash_filters(request: Request) -> FlashFilters:
     )
 
 
-def _tpl(request: Request):
-    return request.app.state.templates
-
-
-# ── 페이지 ─────────────────────────────────────────────────────────────────
-@router.get("/")
-def index(
-    request: Request,
-    filters: Filters = Depends(get_filters),
-    session: Session = Depends(get_session_dep),
-):
-    last_run_id = _last_run_id(session)
-    rows = build_area_group_rows(session, filters, last_run_id)
-    gu_dong_map = address_option_map(session)
-    ctx = {
-        "request": request,
-        "rows": rows,
-        "complexes": list_complexes_filtered(session, filters.gu, filters.dong),
-        "f": filters,
-        "gu_dong_map": gu_dong_map,
-        "new_count": sum(1 for r in rows if r.is_new),
-        "total": len(rows),
-        "title": "매물 목록",
-    }
-    return _tpl(request).TemplateResponse(request, "index.html", ctx)
-
-
-@router.get("/shortlist")
-def shortlist():
-    return RedirectResponse("/app/shortlist", status_code=302)
-
-
-@router.get("/deals")
-def deals():
-    return RedirectResponse("/app/deals", status_code=302)
-
-
-@router.get("/permits")
-def permits():
-    return RedirectResponse("/app/permits", status_code=302)
-
-
-@router.get("/auctions")
-def auctions():
-    return RedirectResponse("/app/auctions", status_code=302)
-
-
-@router.get("/flash")
-def flash():
-    return RedirectResponse("/app/flash", status_code=302)
-
-
-@router.get("/complex/{complex_no}")
-def complex_detail(complex_no: str):
-    return RedirectResponse(f"/app/complex/{complex_no}", status_code=302)
-
-
-@router.get("/listing/{cluster_key}/history")
-def listing_history(
-    cluster_key: str,
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    points = price_history(session, cluster_key)
-    ctx = {
-        "request": request,
-        "points": points,
-        "spark": sparkline(points),
-        "cluster_key": cluster_key,
-    }
-    return _tpl(request).TemplateResponse(request, "_price_history.html", ctx)
-
-
-@router.get("/runs")
-def runs():
-    return RedirectResponse("/app/runs", status_code=302)
-
-
-@router.get("/complexes")
-def complexes_page():
-    return RedirectResponse("/app/complexes", status_code=302)
-
-
 # ── 큐레이션 (JSON 응답, JS 로 즉시 반영) ─────────────────────────────────
 @router.post("/curation/{cluster_key}/exclude")
 def toggle_exclude(
@@ -310,11 +227,6 @@ def set_memo(
 
 
 # ── 지도 ───────────────────────────────────────────────────────────────────
-@router.get("/map")
-def map_view():
-    return RedirectResponse("/app/map", status_code=302)
-
-
 @router.get("/api/map-data")
 def map_data(
     request: Request,

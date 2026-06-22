@@ -82,12 +82,13 @@ def test_dashboard_smoke(tmp_path):
     db, cfg_path, engine = _seed(tmp_path)
     client = TestClient(create_app(str(cfg_path)))
 
-    # 메인(/) 은 아직 서버렌더 — 단지명이 그대로 나온다.
+    # 모든 페이지가 SPA 셸(/)을 공유한다 — 데이터는 JSON API 로 검증한다.
     r = client.get("/")
     assert r.status_code == 200
-    assert "테스트단지" in r.text
+    assert 'id="root"' in r.text  # React 마운트 포인트
+    assert "테스트단지" in {c["name"] for c in client.get("/api/listings").json()["complexes"]}
 
-    # SPA 로 옮겨간 페이지는 셸(200)만 확인하고 데이터는 JSON API 로 검증한다.
+    # SPA 라우트는 셸(200)을 그대로 반환한다(클라이언트 라우팅).
     assert client.get("/shortlist").status_code == 200
     assert client.get("/runs").status_code == 200
     assert client.get("/complex/111").status_code == 200
@@ -104,7 +105,7 @@ def test_dashboard_smoke(tmp_path):
     # 메모/제외는 여전히 매물(cluster) 단위.
     r = client.post(f"/curation/{ck}/memo", data={"memo": "남향 좋음"})
     assert r.status_code == 200 and r.json()["memo"] == "남향 좋음"
-    assert client.get(f"/listing/{ck}/history").status_code == 200
+    assert client.get(f"/api/listing/{ck}/history").status_code == 200
 
     # 관심 해제 시 관심 단지 목록에서 빠진다.
     r = client.post("/complexes/111/star")
@@ -175,13 +176,11 @@ def test_area_group_deal_price_recent_range(tmp_path):
         s.commit()
 
     client = TestClient(create_app(str(cfg_path)))
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "매물 가격(만원)" in r.text
-    assert "실거래가(만원)" in r.text
-    assert "20억~23억" in r.text     # 최근 1개월 범위 (200000~230000)
-    assert "13억" not in r.text      # 1개월 이전 거래는 제외
-    assert "99억9,000" not in r.text  # 취소 거래는 제외
+    rows = client.get("/api/listings").json()["rows"]
+    row = next(r for r in rows if r["complex_no"] == "111")
+    # 최근 1개월 범위(200000~230000) — 1개월 이전(130000)·취소(999000)는 제외
+    assert (row["deal_price_min"], row["deal_price_max"]) == (200000, 230000)
+    assert row["deal_is_recent"] is True
 
 
 def test_area_group_deal_price_fallback_when_no_recent(tmp_path):
@@ -203,11 +202,12 @@ def test_area_group_deal_price_fallback_when_no_recent(tmp_path):
         s.commit()
 
     client = TestClient(create_app(str(cfg_path)))
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "20억1,000" in r.text        # 과거 최근 1건(201000)
-    assert fallback_date[2:7] in r.text  # 거래월(YY-MM) 표시
-    assert "13억" not in r.text          # 더 오래된 거래는 가려짐
+    rows = client.get("/api/listings").json()["rows"]
+    row = next(r for r in rows if r["complex_no"] == "111")
+    # 최근 1개월 거래 없음 → 과거 최근 1건(201000)으로 폴백, 더 오래된 130000 은 가려짐
+    assert (row["deal_price_min"], row["deal_price_max"]) == (201000, 201000)
+    assert row["deal_is_recent"] is False
+    assert row["deal_date"] == fallback_date
 
 
 def test_area_group_deal_price_floor_match(tmp_path):
@@ -226,9 +226,10 @@ def test_area_group_deal_price_floor_match(tmp_path):
         s.commit()
 
     client = TestClient(create_app(str(cfg_path)))
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "20억5,000" in r.text  # 81.97 실거래가 81평형 매물 행에 매핑됨
+    rows = client.get("/api/listings").json()["rows"]
+    row = next(r for r in rows if r["complex_no"] == "111")
+    assert row["deal_price_min"] == 205000  # 81.97 실거래가 81평형 매물 행에 매핑됨
+    assert row["deal_is_recent"] is True
 
 
 def test_floor_min_filter_uses_band_estimate(tmp_path):
@@ -280,7 +281,7 @@ def test_floor_min_filter_uses_band_estimate(tmp_path):
 def test_filters_smoke(tmp_path):
     db, cfg_path, engine = _seed(tmp_path)
     client = TestClient(create_app(str(cfg_path)))
-    # 다양한 필터 조합이 500 없이 동작
+    # 다양한 필터 조합이 500 없이 동작 (SPA 가 소비하는 /api/listings)
     for qs in [
         "?trade_type=SALE",
         "?status=new",
@@ -292,4 +293,4 @@ def test_filters_smoke(tmp_path):
         "?q=테스트",
         "?complex_no=111",
     ]:
-        assert client.get("/" + qs).status_code == 200
+        assert client.get("/api/listings" + qs).status_code == 200

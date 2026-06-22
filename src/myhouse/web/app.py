@@ -7,12 +7,10 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..db.engine import init_db, make_engine
 from ..settings import Settings, load_config
-from ..util import format_manwon, format_price
 from .routes import router
 
 WEB_DIR = Path(__file__).parent
@@ -45,23 +43,18 @@ def create_app(config_path: str | None = None) -> FastAPI:
     with get_session(engine) as session:
         fail_orphan_runs(session, Path(config.app.db_path).parent)
 
-    templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
-    templates.env.filters["manwon"] = format_manwon
-    templates.env.filters["price"] = format_price
-
     app = FastAPI(title="myhouse 부동산 모니터", docs_url=None, redoc_url=None)
     app.state.engine = engine
     app.state.config = config
     app.state.settings = Settings(_env_file=config.app.env_file)
-    app.state.templates = templates
 
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
+    # API/뮤테이션 라우트를 먼저 등록해야 루트(/)의 SPA catch-all 이 /api/* 를 먹지 않는다.
     app.include_router(router)
 
-    # React SPA (/app) — Vite 빌드 산출물. include_router 뒤에 마운트해야 /api/* 가
-    # SPA catch-all 에 먹히지 않는다. dist 가 없으면(빌드 전) 조용히 건너뛴다.
+    # React SPA — Vite 빌드 산출물을 루트(/)에 서빙(단계 6: /app→/ 승격).
+    # dist 가 없으면(빌드 전) 조용히 건너뛴다.
     dist = WEB_DIR / "dist"
     if dist.exists():
-        app.mount("/app", SPAStaticFiles(directory=str(dist), html=True), name="spa")
+        app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="spa")
 
     return app
