@@ -159,6 +159,36 @@ class LandPermit(SQLModel, table=True):
     last_seen_at: str = ""
 
 
+class FlashDeal(SQLModel, table=True):
+    """급매 1건 — 같은 단지·평수·거래유형의 직전 호가 하한가를 일정 비율 이상 언더컷한 매물.
+
+    매물 수집(collect)에 얹혀 탐지하며, 발생 '순간'의 맥락(prior_floor·하락폭)을 박제한다.
+    식별: article_no(매물 1건 = 급매 1건) — 같은 매물이 다시 잡혀도 첫 발생만 보존한다.
+    현재 가격·상태는 listing 행을 조인해 보고, 이 테이블은 발생 시점 스냅샷을 담는다.
+    """
+
+    __tablename__ = "flash_deal"
+    __table_args__ = (
+        Index("ix_flash_complex", "complex_no"),
+        Index("ix_flash_detected_run", "detected_run_id"),
+    )
+
+    article_no: str = Field(primary_key=True, foreign_key="listing.article_no")
+    complex_no: str = Field(foreign_key="complex.complex_no")
+    cluster_key: str = ""
+    trade_type: TradeType
+    area_excl: float | None = None  # 전용면적 ㎡
+    area_key: int | None = None     # area_match_key(버림) — 평형 매칭/그룹 키
+    price_deal: int                 # 급매 발생 당시 가격 (만원)
+    prior_floor: int                # 직전 같은 평수 하한가 (만원) — 판정 기준
+    drop_amount: int                # prior_floor - price_deal (만원)
+    drop_pct: float                 # drop_amount / prior_floor * 100
+    trigger: str = "new"            # "new"(신규) | "price_drop"(가격인하)
+    detected_at: str = ""
+    detected_run_id: int | None = None
+    notified: bool = False          # 텔레그램 알림 완료 여부 — sticky
+
+
 class Curation(SQLModel, table=True):
     """사용자 큐레이션 — cluster_key 기준(중개사 article_no 교체에도 유지).
 
@@ -215,6 +245,7 @@ class Run(SQLModel, table=True):
     kind: str = "listings"  # listings(매물) | deals(실거래)
     status: RunStatus = RunStatus.RUNNING
     targets_count: int = 0
+    complexes_done: int = 0  # 실행 중 진행률 — 수집 완료한 단지 수(실시간 갱신)
     articles_fetched: int = 0  # deals: 수집한 실거래 raw 건수
     new_count: int = 0  # deals: 신규 실거래 수
     price_changed_count: int = 0  # deals: 미사용(0)
@@ -257,6 +288,45 @@ class Subscription(SQLModel, table=True):
     created_at: str = ""
 
 
+class Auction(SQLModel, table=True):
+    """법원경매 물건 1건 (courtauction.go.kr 신규시스템 경유) — 추적 단지에 매칭된 것만 저장.
+
+    실거래/허가와 달리 물건이 '살아 움직인다'(유찰→최저가 하락·기일 변경·매각/취하). 따라서
+    변화는 신규(NEW)뿐 아니라 최저가 하락·기일 변경을 추적한다(diff: core/auction_diff.py).
+    식별: 자연키 auction_key = courtauction docid(물건 단위 고유). 한 사건 다물건이면 각각 행.
+    금액은 만원 단위. 상세·사진·권리분석은 옥션원(auction1_url)/법원공고(court_url)로 연결.
+    """
+
+    __tablename__ = "auction"
+    __table_args__ = (
+        Index("ix_auction_complex_saledate", "complex_no", "sale_date"),
+        Index("ix_auction_first_seen_run", "first_seen_run_id"),
+    )
+
+    auction_key: str = Field(primary_key=True)  # = courtauction docid
+    complex_no: str = Field(foreign_key="complex.complex_no")  # 매칭된 추적 단지
+    court_code: str | None = None
+    court_name: str | None = None  # "서울중앙지방법원"
+    case_no: str = ""  # 표시 사건번호 "2024타경12345"
+    item_no: str | None = None  # 물건번호(한 사건 다물건)
+    address: str = ""  # 소재지(지번)
+    building_name: str | None = None  # 단지/건물명(빈값 가능)
+    usage_name: str | None = None  # 물건종류(아파트 등)
+    area_excl: float | None = None  # 전용 추정 ㎡
+    appraisal_manwon: int | None = None  # 감정가(만원)
+    min_bid_manwon: int | None = None  # 최저매각가(만원)
+    min_bid_ratio: int | None = None  # 최저가/감정가 %
+    fail_count: int = 0  # 유찰횟수
+    sale_date: str | None = None  # 매각기일 ISO
+    status_code: str | None = None  # 물건상태(mulStatcd)
+    in_progress: bool = True  # 진행 여부(mulJinYn)
+    auction1_url: str | None = None  # 옥션원 딥링크
+    court_url: str | None = None  # 법원경매 사건검색 딥링크
+    first_seen_at: str = ""
+    first_seen_run_id: int | None = None
+    last_seen_at: str = ""
+
+
 class Meta(SQLModel, table=True):
     """key/value 메타 — schema_version, last_successful_run_id 등."""
 
@@ -266,7 +336,9 @@ class Meta(SQLModel, table=True):
     value: str | None = None
 
 
-SCHEMA_VERSION = "11"  # 11: 유저별 단지 구독(subscription) — /add 소유 추적 + /list·알림 개인화
+SCHEMA_VERSION = "14"  # 14: run.complexes_done — 수집 실행 중 단지 진행률(실시간)
+# 12: 급매(flash_deal) 테이블 — 같은 평수 직전 호가하한 ≥임계 언더컷 탐지·적재
+# 11: 유저별 단지 구독(subscription) — /add 소유 추적 + /list·알림 개인화
 # 10: 구독자 승인(subscriber.approved) — /join 초대코드 셀프등록
 # 9: 구독자 가격밴드(subscriber.price_min/max_manwon)
 # 8/7: 단지 메타(complex.total_dong_count/use_approve_ymd/floor_area_ratio/building_coverage_ratio)

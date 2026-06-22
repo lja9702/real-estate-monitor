@@ -1,275 +1,115 @@
-# 인수인계 — myhouse React SPA 마이그레이션 (단계 2~3 착수 준비 완료)
+# 인수인계 — myhouse React SPA 마이그레이션
 
-이 파일은 직전 세션에서 완료된 분석·계획을 요약하고, 다음 세션에서 바로 구현을 착수하기 위한 문서다.
-
----
-
-## 0. 작업 배경
-
-`/Users/jajs/Projects/my-house` — FastAPI + Jinja2 SSR 부동산 모니터 대시보드.
-
-**요청**: 매물 페이지(`/`)의 가격·전용·층수·세대수·준공 필터를 텍스트 input에서 **min~max 듀얼 슬라이더**로 바꾸고, React + FSD + shadcn/ui 구조로 프론트를 리팩토링.
-
-**확정된 범위: MVP (단계 1~3만)** — 슬라이더+매물 페이지 완성. 나머지 7페이지는 기존 Jinja로 공존.
-
-**전체 계획 파일**: `/Users/jajs/.claude/plans/drifting-knitting-pudding.md` (이미 사용자 승인됨)
+브랜치 `feature/react-spa-migration`. 단계 1~5 + 후속 개선 완료. **단계 6(정리)** 과 **미커밋 작업 2갈래** 가 남았다.
 
 ---
 
-## 1. 현재 상태 (직전 세션 종료 시점)
+## 1. 현재 상태 (✅ 완료, 커밋됨)
 
-- [x] 코드베이스 전수 분석 완료 (web 스택·템플릿·JS·테스트·배포 전부)
-- [x] 마이그레이션 계획 승인됨 (`drifting-knitting-pudding.md`)
-- [x] Task #1 생성됨: "단계2: 백엔드 JSON API 추가" (pending)
-- [ ] **Node.js 미설치** — 사용자가 직접 설치하기로 함 (brew/nvm/공식 인스톨러 중 선택)
-- [ ] 구현 착수 전 세션 종료됨
-
----
-
-## 2. 아키텍처 요약
-
-```
-/app/*    → React SPA (Vite 빌드 산출물 → src/myhouse/web/dist)   ← 신규
-/         → 기존 Jinja SSR (매물/실거래/허가 등 7페이지)           ← 공존 유지
-/api/*    → 신규 JSON API (단계 2에서 추가)
-/curation, /complexes, /run* → 기존 JSON mutation (무수정)
-```
-
-**핵심 설계 결정**: SPA를 `/app` 경로에 올려 Jinja와 공존. 페이지가 React로 완성될 때마다 Jinja 라우트를 `/app/*`로 넘김. 마지막에 `/`로 승격 (단계 6, 이번 MVP 범위 아님).
+- **단계 1 (스캐폴딩)**: `frontend/` — Vite 8 + React 19 + TS 6 + Tailwind v4 + shadcn/ui(nova) + TanStack Query v5 + react-router v7. `app.py`가 `/app`에 dist 마운트.
+- **단계 2 (JSON API)**: `/api/listings`, `/api/filter-domains`, `/api/listing/{cluster_key}/history`.
+- **단계 3 (매물 페이지)**: 듀얼 슬라이더 5개 + 테이블. 별표/메모/제외/이력. sticky 헤더+필터바.
+- **단계 4 (나머지 페이지)**: `/complex/{no}`, `/runs`, `/shortlist`, `/complexes`, `/deals`, `/permits` 전부 React. 각 Jinja 라우트는 `/app/*`로 302 리다이렉트.
+- **단계 5 (지도)**: `/map` → `/app/map`. `/api/config`(네이버 키), `/api/map-data`. 네이버 Maps SDK 동적 로드 + 마커 + InfoWindow + 거래유형 필터.
+- **헤더 복원** (`68b000b`): 페이지 네비(매물/실거래가/토지거래허가/★ 관심단지/지도/추적단지/실행로그) + 수집 버튼(지금 수집/실거래/허가)을 `root-layout.tsx`에 복원.
+- **5가지 UI 개선** (`3f4ffae`):
+  1. 지도 InfoWindow 단지명 → 네이버 단지 링크
+  2. 전용면적 슬라이더에 평 병기(`formatAreaWithPyeong`)
+  3. `/complex/{no}` 단지명 옆 네이버 링크
+  4. `/complex/{no}` 매물·실거래 평수 필터 바
+  5. 수집 취소 버튼(`/run-cancel` → `pkill -f "myhouse.cli collect"`)
+- **새 엔드포인트** (`routes.py`, 커밋됨): `GET /api/config`(네이버 키 노출), `POST /run-cancel`(수집 중단).
+  - ⚠️ **라이브(8765)는 launchd 재시작 전까지 구 파이썬 코드 사용** → 이 두 엔드포인트는 `launchctl kickstart -k gui/$(id -u)/com.myhouse.dashboard` 후에야 동작(사용자 동의 필요). 프론트 dist는 실시간 반영됨.
 
 ---
 
-## 3. 단계별 구현 순서
+## 2. 미커밋 작업 트리 상태 ⚠️ (커밋 전 분리할 것)
 
-### 단계 1 — 스캐폴딩 + 빈 SPA 서빙 (Node 설치 후 착수)
+`git status` 에 2갈래가 섞여 있다. **별도 커밋 2개로 나눌 것.**
 
-**생성**: `frontend/` 디렉터리 — Vite + React 18 + TS + Tailwind + shadcn/ui + TanStack Query v5 + react-router v6
+### 갈래 A — SPA 마무리 (커밋 가능)
+- `config.yaml`: discover 지역 추가(성남 분당구·성남 구도심·용인 수지구·과천시) + 가격대 **7~30억**(`price_min 70000`, `price_max 300000`). defaults도 `price_min 70000`.
+  - 판교는 성남 분당구 bbox `[127.06,127.18,37.42,37.32]` 에 포함 → 별도 등록 안 함.
+- `src/myhouse/cli.py`: **`bulk-import` 커맨드 신규**. discover.regions 마커를 수집해 `config.yaml targets` 에 일괄 append(이미 있는 단지·지역 간 중복 스킵).
+  - 사용: `PYTHONPATH=src .venv/bin/myhouse bulk-import --dry-run` → 확인 후 `--dry-run` 제거.
+  - **아직 dry-run만 실행**(446개 추가 예정). config.yaml에 targets는 미반영 상태.
+
+### 갈래 B — 급매(flash-deals), **백엔드만·미연동** (별도 기능)
+메모리 `myhouse-flash-deals.md` 설계대로 백엔드는 구현됐으나 **어디에도 노출 안 됨.**
+- 있음: `core/flash.py`(순수함수), `tests/test_flash.py`, `models.py`(FlashDeal 스키마), `repo.py`/`collector.py`(수집 시 탐지), `settings.py`(flash config), `util.py`, `config.yaml`의 `flash:` 블록, `queries.py`.
+- **없음(미연동)**: 프론트 `/app/flash` 페이지·router 라우트 ✗, `/api/flash` 엔드포인트 ✗, 텔레그램 🔥급매 다이제스트 ✗.
+- → 이 기능을 끝내려면 별도 작업 필요. SPA 마이그레이션 PR과 **섞지 말 것.**
+
+---
+
+## 3. 테스트 상태
 
 ```bash
-# Node 설치 확인 후
-node --version   # v20+ 권장
-cd /Users/jajs/Projects/my-house
-npm create vite@latest frontend -- --template react-ts
-cd frontend
-npm install
-npx tailwindcss init -p   # 또는 tailwind v4 방식
-npx shadcn@latest init
-npm install @tanstack/react-query react-router-dom
-npm install -D vitest @testing-library/react @testing-library/user-event jsdom
+PYTHONPATH=. .venv/bin/python -m pytest -q     # 238 passed, 5 failed
+cd frontend && npx vitest run
 ```
 
-**핵심 설정 파일**:
-- `frontend/vite.config.ts` — `base: "/app/"`, `build.outDir: "../src/myhouse/web/dist"`, dev proxy
-- `frontend/tsconfig.json` — `paths: { "@/*": ["./src/*"] }`
+**실패 5개는 전부 단계 6의 "HTML 테스트 재작성" 항목** — 회귀 아님, 예상됨:
+- `test_web.py::test_dashboard_smoke`, `test_complex_detail_shows_meta`
+- `test_web_complexes.py::test_complexes_page_lists_tracked`
+- `test_web_deals.py::test_deals_page_smoke`, `test_complex_detail_has_deal_section`
 
-**vite.config.ts 핵심 내용**:
-```ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import path from 'path'
-
-export default defineConfig({
-  plugins: [react()],
-  base: '/app/',
-  resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
-  build: { outDir: path.resolve(__dirname, '../src/myhouse/web/dist'), emptyOutDir: true },
-  server: {
-    port: 5173,
-    proxy: {
-      '/api': 'http://127.0.0.1:8765',
-      '/curation': 'http://127.0.0.1:8765',
-      '/complexes': 'http://127.0.0.1:8765',
-      '/run': 'http://127.0.0.1:8765',
-      '/static': 'http://127.0.0.1:8765',
-    },
-  },
-})
-```
-
-**FastAPI 수정** (`src/myhouse/web/app.py` 끝에 추가):
-```python
-dist = WEB_DIR / "dist"
-if dist.exists():
-    app.mount("/app", StaticFiles(directory=str(dist), html=True), name="spa")
-```
-`include_router(router)` **뒤에** 달아야 `/api/*`가 SPA에 안 먹힘.
-
-**.gitignore 추가**:
-```
-frontend/node_modules/
-src/myhouse/web/dist/
-```
-
-**완료 기준**: `npm run build` → `myhouse serve` → `localhost:8765/app/` 에서 React 셸 렌더. 기존 `/` Jinja 정상. `pytest` green.
+원인: 해당 Jinja 라우트가 `/app/*` 302 리다이렉트로 바뀌어 `'…' in r.text`(서버렌더 HTML 단언)가 깨짐. 단계 6에서 JSON API 검증으로 재작성하면 해소.
 
 ---
 
-### 단계 2 — 백엔드 JSON API 추가 (Node 불필요, 먼저 가능)
+## 4. 단계 6 — 정리 (남은 작업)
 
-**`src/myhouse/web/queries.py` 끝에 추가**:
-```python
-@dataclass
-class FilterDomains:
-    price_min: int
-    price_max: int
-    area_min: float
-    area_max: float
-    households_min: int
-    households_max: int
-    year_min: int
-    year_max: int
-    floor_max: int
-
-def filter_domains(session: Session) -> FilterDomains:
-    from sqlmodel import select as sel, func
-    from ..db.models import Listing, Complex
-    # Listing의 활성 매물 기준 min/max 집계. None 안전 + 빈 DB 폴백.
-    r = session.exec(
-        sel(
-            func.min(Listing.price_deal), func.max(Listing.price_deal),
-            func.min(Listing.area_excl), func.max(Listing.area_excl),
-            func.min(Listing.floor_num), func.max(Listing.floor_num),
-        ).where(Listing.article_status != "REMOVED")
-    ).first()
-    cx = session.exec(
-        sel(func.min(Complex.total_households), func.max(Complex.total_households),
-            func.min(Complex.use_approve_ymd), func.max(Complex.use_approve_ymd))
-    ).first()
-    def yi(ymd): return int(ymd[:4]) if ymd else None
-    return FilterDomains(
-        price_min=r[0] or 0,        price_max=r[1] or 300000,
-        area_min=r[2] or 0,         area_max=r[3] or 200,
-        households_min=cx[0] or 0,  households_max=cx[1] or 5000,
-        year_min=yi(cx[2]) or 1970, year_max=yi(cx[3]) or 2025,
-        floor_max=r[5] or 30,
-    )
-```
-
-**`src/myhouse/web/routes.py` 에 추가** (기존 map_data 라우트 아래):
-```python
-@router.get("/api/listings")
-def api_listings(
-    filters: Filters = Depends(get_filters),
-    session: Session = Depends(get_session_dep),
-):
-    rows = build_area_group_rows(session, filters, _last_run_id(session))
-    return {
-        "rows": [dataclasses.asdict(r) for r in rows],
-        "total": len(rows),
-        "new_count": sum(1 for r in rows if r.is_new),
-        "complexes": [
-            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
-            for c in list_complexes_filtered(session, filters.gu, filters.dong)
-        ],
-        "gu_dong_map": address_option_map(session),
-    }
-
-
-@router.get("/api/filter-domains")
-def api_filter_domains(session: Session = Depends(get_session_dep)):
-    return dataclasses.asdict(filter_domains(session))
-
-
-@router.get("/api/listing/{cluster_key}/history")
-def api_listing_history(cluster_key: str, session: Session = Depends(get_session_dep)):
-    pts = price_history(session, cluster_key)
-    return {"points": [dataclasses.asdict(p) for p in pts], "spark": sparkline(pts)}
-```
-
-`routes.py` import에 `filter_domains` 추가 필요 (`from .queries import ... filter_domains`).
-
-**검증용 테스트** (`tests/test_api.py` 신규):
-- `GET /api/listings` → 200, `rows/total/new_count/complexes/gu_dong_map` 키 존재
-- `GET /api/listings?price_min=99999999` → `rows` 빈 배열 (극단값 필터 동작)
-- `GET /api/filter-domains` → 200, `price_min <= price_max` 등
-- 기존 `tests/test_web.py` 전부 green 유지 확인
-
----
-
-### 단계 3 — React 매물 페이지 구현 (단계 1+2 완료 후)
-
-FSD 디렉터리 구조 (`frontend/src/`):
-```
-app/          App.tsx, providers/router+query, layouts/root-layout, styles/index.css
-pages/listings/index.tsx
-widgets/app-header/, filter-panel/listing-filter-panel.tsx, listing-table/
-features/
-  filter-listings/model/use-listing-filters.ts   ← URL↔필터 동기화
-  star-complex/, exclude-listing/, edit-memo/, price-history/
-entities/listing/api/get-listings.ts, model/types.ts
-shared/
-  ui/ (shadcn: slider, select, checkbox, input, button, dialog, table, badge)
-  ui/range-slider.tsx  ← ★ 듀얼핸들 래퍼
-  api/client.ts, query-keys.ts
-  lib/format.ts, cn.ts, debounce.ts
-  config/constants.ts
-```
-
-**듀얼 슬라이더** (`shared/ui/range-slider.tsx`):
-- shadcn `<Slider value={[lo, hi]}>`면 thumb 2개 자동 렌더 (Radix 기본)
-- `onValueChange` → 로컬 state (라벨 즉시 갱신)
-- `onValueCommit` → URL 커밋 → TanStack Query refetch
-
-**슬라이더 step**:
-- 가격: 1000 (만원 단위, = 천만원)
-- 전용: 1 (㎡)
-- 세대수: 50
-- 준공: 1 (년)
-- 층(floor_min): 1 — **단일 슬라이더** (하한만)
-
-**format_manwon 포팅** (`shared/lib/format.ts`):
-```ts
-export function formatManwon(v: number | null): string {
-  if (v == null) return "-";
-  if (v < 0) return "-" + formatManwon(-v);
-  const eok = Math.floor(v / 10000), rem = v % 10000;
-  if (eok && rem) return `${eok}억${rem.toLocaleString("ko-KR")}`;
-  if (eok) return `${eok}억`;
-  return v.toLocaleString("ko-KR");
-}
-// vitest: formatManwon(158000)==="15억8,000", 90000=>"9억", 5000=>"5,000"
-```
-
----
-
-## 4. 재사용 자산 (건드리지 않아도 되는 것들)
-
-| 파일 | 재사용 포인트 |
+| 항목 | 내용 |
 |---|---|
-| `src/myhouse/web/queries.py` | 모든 빌더 함수 무수정 재사용. `build_area_group_rows`, `price_history`, `sparkline`, `address_option_map`, `list_complexes_filtered` |
-| `src/myhouse/web/routes.py:65-92` | `get_filters()` + `Filters` dataclass — JSON API에서도 동일 `Depends` 재사용 |
-| `src/myhouse/web/routes.py:291-434` | 별표/제외/메모/추적/수집 mutation (POST) — React에서 그대로 호출 |
-| `src/myhouse/web/app.py:37` | `StaticFiles` 패턴 — SPA dist 마운트에 재사용 |
-| `src/myhouse/util.py:6-17` | `format_manwon` 원본 — TS 포팅의 정답 소스 |
-| `tests/conftest.py` | `engine` fixture (tmp SQLite) — 신규 test_api.py에서 그대로 재사용 |
+| Jinja 라우트 삭제 | `routes.py` 리다이렉트 라우트, `templates/*.html`, 구 `app.js`/`app.css` |
+| SPA를 `/`로 승격 | `app.py` `/app`→`/` 마운트, basename 변경(`vite.config.ts` + `router.tsx`) |
+| HTML 테스트 재작성 | 위 실패 5개 → JSON 응답 검증으로 전환 |
+| 빌드 단계 추가 | `install_launchd.sh`에 `npm ci && npm run build` |
 
 ---
 
-## 5. 주의사항
+## 5. DB 방침 — SQLite 유지 (결론)
 
-1. **app.py 마운트 순서**: `app.include_router(router)` **뒤에** SPA StaticFiles. 반대면 `/api/*`가 SPA catch-all에 먹힘.
-2. **`filter_domains`의 Listing 모델 필드명**: `src/myhouse/db/models.py`에서 실제 컬럼명 확인 필요 (`price_deal`, `area_excl`, `floor_num`, `article_status` 등). 집계 쿼리 작성 전 확인.
-3. **TradeType enum**: `AreaGroupRow.trade_type`이 `TradeType(str, Enum)`이라 `dataclasses.asdict()`→`"SALE"` 문자열로 직렬화됨 — OK.
-4. **공존 기간**: 기존 Jinja HTML 라우트(`GET /`, `GET /deals` 등)는 단계 4~6까지 **그대로 유지**. 건드리지 말 것.
+데이터 증가가 걱정됐으나 **현 워크로드에 SQLite가 정답.** 바꾸지 말 것.
+- 단일 호스트(launchd) · 단일 writer(수집 subprocess) + 동시 reader(대시보드) → 이미 **WAL**(`engine.py`)로 해결.
+- 큰 `listing`(13MB)은 누적 로그가 아니라 **현재상태(upsert)** — 단지수에 비례해 상한, 평탄화됨.
+- 무한증가는 `listing_history`(이벤트 로그) 하나뿐. 보수적 추정 5년 후도 200MB대 → SQLite 여유.
+- 이미 SQLModel/SQLAlchemy라 훗날 Postgres 전환도 거의 공짜(connection string + WAL PRAGMA만). **미리 옮길 이유 없음.**
+- (선택) 용량 못 박고 싶으면 `listing_history` 보존정책 prune 잡 하나면 충분 — 현재 정리 로직 없음.
 
 ---
 
-## 6. 다음 세션 시작 체크리스트
+## 6. 빌드 · 실행 · 검증
 
+```bash
+export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+cd frontend && npm run build                                   # 프로덕션 빌드
+
+launchctl kickstart -k gui/$(id -u)/com.myhouse.dashboard      # 라이브 재시작(사용자 동의 필요)
 ```
-[ ] node --version   # v20+ 확인 (없으면 단계 2 먼저)
-[ ] cd /Users/jajs/Projects/my-house
-[ ] python -m pytest tests/test_web.py -q   # 기준선 확인
-[ ] Task #1 in_progress 마크 후 단계 2 구현 착수
-    (단계 2는 Node 없어도 됨 — 백엔드 Python 작업)
-```
+
+- 라이브 8765는 dist를 실시간으로 읽음 → 빌드 후 `localhost:8765/app/` + Cmd+Shift+R
+- 파이썬 코드(routes.py 등) 변경은 launchd 재시작 후 반영
 
 ---
 
-## 7. 참고 링크
+## 7. 컨벤션 · 주의 (다시 발견하지 말 것)
+
+1. **app.py 마운트 순서**: `include_router(router)` 먼저 → `SPAStaticFiles("/app")`. 반대면 `/api/*`가 catch-all에 먹힘.
+2. **SPAStaticFiles**: Starlette `StaticFiles(html=True)`는 서브경로 직접접근 시 404 → 커스텀 서브클래스가 index.html로 대체.
+3. **mutation은 form-urlencoded**(`apiPostForm`/`URLSearchParams`) — JSON 금지.
+4. **react-router `basename: '/app'`**, 내부 이동은 `<Link>`.
+5. **필터 상태 = URL 단일 소스**(`useSearchParams`), 슬라이더는 `onValueCommit`→URL.
+6. **네이버 Maps SDK**: `pages/map/index.tsx` `_sdkLoad` 싱글턴 동적 로드, key는 `/api/config`로 노출. InfoWindow 닫기 버튼은 `window.__mapClose` 전역.
+7. **discover bbox 가 실제 지리 필터**(cortarNo는 메타). bbox=`[leftLon, rightLon, topLat, bottomLat]`. 신규 지역은 `probe-markers --region "이름"` 으로 누락/노이즈 확인 후 조정.
+8. **절대 커밋 금지**: `.env`, `data/`, `logs/`, `*.db`/`*.db-wal`/`*.db-shm`, `.claude/settings.local.json`. `config.yaml`은 시크릿 없어 안전.
+9. **라이브 launchd 무단 재시작 금지**(`com.myhouse.*`) — 사용자 동의 필요.
+
+---
+
+## 8. 참고
 
 - 전체 계획: `/Users/jajs/.claude/plans/drifting-knitting-pudding.md`
-- 기존 필터 UI: `src/myhouse/web/templates/index.html:54-62`
-- 백엔드 라우트: `src/myhouse/web/routes.py`
-- 쿼리/빌더: `src/myhouse/web/queries.py`
-- DB 모델: `src/myhouse/db/models.py` (단계 2 filter_domains 작성 전 확인)
+- 프론트 루트: `frontend/src` (FSD — `shared/entities/features/widgets/pages/app`)
+- 백엔드: `src/myhouse/web/routes.py`, `queries.py`, `app.py` · CLI: `src/myhouse/cli.py`

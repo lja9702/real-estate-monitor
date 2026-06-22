@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -11,13 +12,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import update
 from sqlalchemy.engine import Engine
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from ..constants import EventType, ListingStatus, RunStatus, from_iso, now_kst, to_iso
 from ..db import repo
 from ..db.engine import get_session, set_meta
-from ..db.models import Listing, ListingHistory
+from ..db.models import Listing, ListingHistory, Run
 from ..naver.client import FetchResult, NaverLandClient
 from ..naver.errors import NaverApiError, NaverParseError
 from ..naver.parser import ArticleDTO
@@ -34,6 +36,7 @@ from .diff import (
     ListingState,
     diff_complex,
 )
+from .flash import FlashSignal, detect_flash_deals
 from .targets import ResolvedTarget, resolve_targets
 
 log = logging.getLogger(__name__)
@@ -43,6 +46,77 @@ LOCK_STALE_SECONDS = 3600  # 이보다 오래된 락은 죽은 프로세스로 �
 
 class CollectorLocked(RuntimeError):
     """다른 수집이 이미 실행 중."""
+
+
+class CollectionInterrupted(Exception):
+    """SIGTERM 등 외부 종료 신호로 수집이 중단됨 — run 을 FAILED 로 마무리하기 위한 신호."""
+
+
+def install_term_handler() -> None:
+    """SIGTERM 을 예외로 바꿔 _run_collection 의 except 가 run 을 FAILED 로 정리하게 한다.
+
+    kill·pkill·대시보드 취소 버튼은 SIGTERM 을 보낸다. 이 핸들러가 없으면 프로세스가 그냥
+    죽어 run 이 RUNNING 에 고착(좀비)된다. SIGKILL(-9)·크래시는 잡을 수 없어 serve 부팅 시
+    fail_orphan_runs 안전망이 처리한다. 수집 전용 프로세스의 main 스레드에서만 호출할 것.
+    """
+
+    def _raise(signum: int, _frame: object) -> None:
+        raise CollectionInterrupted(f"종료 신호 수신(SIG{signum})")
+
+    signal.signal(signal.SIGTERM, _raise)
+
+
+# run.kind → 해당 수집기가 쓰는 파일락 이름. fail_orphan_runs 의 생존 판정에 쓰인다.
+_LOCK_FILES: dict[str, str] = {
+    "listings": ".collector.lock",
+    "deals": ".deal_collector.lock",
+    "permits": ".permit_collector.lock",
+    "auctions": ".auction_collector.lock",
+    "discover": ".discover.lock",
+}
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 존재하지만 시그널 권한 없음 — 살아있음
+    return True
+
+
+def _lock_held_by_live_process(lock_path: Path) -> bool:
+    """락 파일이 살아있는 프로세스의 PID 를 담고 있으면 True (= 진짜 수집 중)."""
+    try:
+        pid_str = lock_path.read_text().strip()
+    except OSError:
+        return False
+    return pid_str.isdigit() and _pid_alive(int(pid_str))
+
+
+def fail_orphan_runs(session: Session, data_dir: Path) -> int:
+    """RUNNING 으로 남았지만 수집 프로세스가 없는 좀비 run 을 FAILED 로 정리한다(정리 건수 반환).
+
+    run.kind 의 락을 살아있는 PID 가 점유 중이면 실제 실행 중이므로 건드리지 않는다. 락 획득은
+    run 생성보다 먼저라, 진짜 실행 중인 run 은 반드시 살아있는 락을 동반한다 → 오판이 없다.
+    알 수 없는 kind(락 매핑 없음)는 라이브 run 오판 방지를 위해 보존한다.
+    """
+    orphans = [
+        run
+        for run in session.exec(select(Run).where(Run.status == RunStatus.RUNNING))
+        if (lock := _LOCK_FILES.get(run.kind)) is not None
+        and not _lock_held_by_live_process(data_dir / lock)
+    ]
+    for run in orphans:
+        run.status = RunStatus.FAILED
+        run.finished_at = to_iso(now_kst())
+        run.error = run.error or "프로세스 종료로 미완료 — 자동 정리됨"
+        session.add(run)
+    if orphans:
+        session.commit()
+        log.warning("좀비 run %d건 FAILED 처리: %s", len(orphans), [r.id for r in orphans])
+    return len(orphans)
 
 
 @contextmanager
@@ -77,6 +151,7 @@ class ComplexResult:
     address: str | None = None
     diff: ComplexDiff | None = None
     fetch: FetchResult | None = None
+    flash: list[FlashSignal] = field(default_factory=list)
     error: str | None = None
 
 
@@ -92,6 +167,7 @@ class RunResult:
     price_changed_count: int = 0
     removed_count: int = 0
     reappeared_count: int = 0
+    flash_count: int = 0
     http_errors: int = 0
     starred_complexes: set[str] = field(default_factory=set)  # 관심 단지번호(다이제스트 ★)
 
@@ -268,20 +344,38 @@ def _collect_one(
         removal_debounce_hours=config.app.removal_debounce_hours,
         fetch_complete=fetch.complete,
     )
+
+    # 급매 탐지는 반드시 _apply_ops *전에* — existing_rows 가 아직 '수집 전' 스냅샷(하한가 기준)일 때.
+    # _apply_ops 가 같은 ORM 객체의 가격/상태를 갱신하므로, 그 뒤에 하한가를 재면 오염된다.
+    flash_signals: list[FlashSignal] = []
+    if config.flash.enabled:
+        flash_signals = detect_flash_deals(
+            cdiff,
+            existing_rows,
+            trade_types=set(config.flash.trade_types),
+            min_drop_pct=config.flash.min_drop_pct,
+            min_drop_manwon=config.flash.min_drop_manwon,
+            include_price_drops=config.flash.include_price_drops,
+        )
+
     _apply_ops(session, cdiff, by_id, run_id, to_iso(now))
+    repo.add_flash_deals(session, flash_signals, run_id=run_id, now=to_iso(now))
     session.commit()
 
     log.info(
-        "단지 %s(%s): 수집 %d건 · 신규 %d · 가격변동 %d · 거래완료 %d%s",
+        "단지 %s(%s): 수집 %d건 · 신규 %d · 가격변동 %d · 거래완료 %d · 급매 %d%s",
         cx.complex_no,
         label,
         len(fetch.articles),
         len(cdiff.new),
         len(cdiff.price_changed),
         len(cdiff.removed),
+        len(flash_signals),
         "" if fetch.complete else " · ⚠수집불완전(삭제판정 생략)",
     )
-    return ComplexResult(cx.complex_no, label, cx.name, address=cx.address, diff=cdiff, fetch=fetch)
+    return ComplexResult(
+        cx.complex_no, label, cx.name, address=cx.address, diff=cdiff, fetch=fetch, flash=flash_signals
+    )
 
 
 def run_collection(
@@ -356,14 +450,28 @@ def _run_collection(
             targets = build(session)
             log.info("수집 시작 (run #%s, 트리거=%s, 타겟 %d개)", run_id, trigger, len(targets))
 
+            run.targets_count = len(targets)
+            session.add(run)
+            session.commit()
+
             results: list[ComplexResult] = []
+            complexes_done = 0
             for rt in targets:
-                results.append(_collect_one(session, rt, run_id, config, client, now))
+                result = _collect_one(session, rt, run_id, config, client, now)
+                results.append(result)
+                complexes_done += 1
+                session.execute(
+                    update(Run)
+                    .where(Run.id == run_id)
+                    .values(complexes_done=complexes_done)
+                )
+                session.commit()
 
             new_count = sum(len(r.diff.new) for r in results if r.diff)
             price_changed_count = sum(len(r.diff.price_changed) for r in results if r.diff)
             removed_count = sum(len(r.diff.removed) for r in results if r.diff)
             reappeared_count = sum(len(r.diff.reappeared) for r in results if r.diff)
+            flash_count = sum(len(r.flash) for r in results)
             articles_fetched = sum(r.fetch.raw_count for r in results if r.fetch)
             http_errors = sum(1 for r in results if r.error or (r.fetch and not r.fetch.complete))
             status = RunStatus.PARTIAL if http_errors else RunStatus.SUCCESS
@@ -394,6 +502,7 @@ def _run_collection(
                 price_changed_count=price_changed_count,
                 removed_count=removed_count,
                 reappeared_count=reappeared_count,
+                flash_count=flash_count,
                 http_errors=http_errors,
                 starred_complexes=repo.starred_complex_nos(session),
             )
@@ -408,12 +517,13 @@ def _run_collection(
                 client.close()
 
     log.info(
-        "수집 완료 (run #%s, %s): 신규 %d · 가격변동 %d · 거래완료 %d",
+        "수집 완료 (run #%s, %s): 신규 %d · 가격변동 %d · 거래완료 %d · 급매 %d",
         run_id,
         run_result.status.value,
         run_result.new_count,
         run_result.price_changed_count,
         run_result.removed_count,
+        run_result.flash_count,
     )
 
     if notify is not None and (run_result.total_changes > 0 or config.app.notify_on_no_change):

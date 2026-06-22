@@ -82,10 +82,12 @@ def test_dashboard_smoke(tmp_path):
     db, cfg_path, engine = _seed(tmp_path)
     client = TestClient(create_app(str(cfg_path)))
 
+    # 메인(/) 은 아직 서버렌더 — 단지명이 그대로 나온다.
     r = client.get("/")
     assert r.status_code == 200
     assert "테스트단지" in r.text
 
+    # SPA 로 옮겨간 페이지는 셸(200)만 확인하고 데이터는 JSON API 로 검증한다.
     assert client.get("/shortlist").status_code == 200
     assert client.get("/runs").status_code == 200
     assert client.get("/complex/111").status_code == 200
@@ -93,11 +95,11 @@ def test_dashboard_smoke(tmp_path):
     with get_session(engine) as s:
         ck = s.exec(select(Listing)).first().cluster_key
 
-    # 관심(별표)은 단지 단위 — 단지 토글 시 관심 단지 목록에 반영된다.
+    # 관심(별표)은 단지 단위 — 단지 토글 시 관심 단지 목록(/api/shortlist)에 반영된다.
     r = client.post("/complexes/111/star")
     assert r.status_code == 200 and r.json()["starred"] is True
-    assert "테스트단지" in client.get("/shortlist").text
-    assert client.get("/?starred_only=on").status_code == 200
+    assert "테스트단지" in {row["name"] for row in client.get("/api/shortlist").json()["rows"]}
+    assert client.get("/api/listings?starred_only=on").status_code == 200
 
     # 메모/제외는 여전히 매물(cluster) 단위.
     r = client.post(f"/curation/{ck}/memo", data={"memo": "남향 좋음"})
@@ -107,11 +109,11 @@ def test_dashboard_smoke(tmp_path):
     # 관심 해제 시 관심 단지 목록에서 빠진다.
     r = client.post("/complexes/111/star")
     assert r.status_code == 200 and r.json()["starred"] is False
-    assert "테스트단지" not in client.get("/shortlist").text
+    assert "테스트단지" not in {row["name"] for row in client.get("/api/shortlist").json()["rows"]}
 
 
 def test_complex_detail_shows_meta(tmp_path):
-    """단지 메타가 채워지면 단지상세 페이지에 한 줄 요약으로 표시된다."""
+    """단지 메타가 채워지면 단지상세 API(stat.meta_line)에 한 줄 요약으로 실린다."""
     db, cfg_path, engine = _seed(tmp_path)
     with get_session(engine) as s:
         repo.upsert_complex(
@@ -123,18 +125,20 @@ def test_complex_detail_shows_meta(tmp_path):
             floor_area_ratio=238,
             building_coverage_ratio=23,
         )
-    html = TestClient(create_app(str(cfg_path))).get("/complex/111").text
-    assert "419세대(3개동)" in html
-    assert "1975.11 준공" in html
-    assert "용적률 238%" in html
-    assert "건폐율 23%" in html
+    client = TestClient(create_app(str(cfg_path)))
+    assert client.get("/complex/111").status_code == 200  # SPA 셸 로드
+    meta = client.get("/api/complex/111").json()["stat"]["meta_line"]
+    assert "419세대(3개동)" in meta
+    assert "1975.11 준공" in meta
+    assert "용적률 238%" in meta
+    assert "건폐율 23%" in meta
 
 
 def test_complex_detail_omits_meta_when_absent(tmp_path):
-    """메타가 없으면(신규/미백필 단지) 메타 줄을 렌더하지 않는다."""
+    """메타가 없으면(신규/미백필 단지) stat.meta_line 이 None 이다."""
     db, cfg_path, engine = _seed(tmp_path)  # _seed 는 메타를 채우지 않는다
-    html = TestClient(create_app(str(cfg_path))).get("/complex/111").text
-    assert "준공" not in html and "용적률" not in html
+    stat = TestClient(create_app(str(cfg_path))).get("/api/complex/111").json()["stat"]
+    assert stat["meta_line"] is None
 
 
 def _days_ago(n: int) -> str:
@@ -225,6 +229,52 @@ def test_area_group_deal_price_floor_match(tmp_path):
     r = client.get("/")
     assert r.status_code == 200
     assert "20억5,000" in r.text  # 81.97 실거래가 81평형 매물 행에 매핑됨
+
+
+def test_floor_min_filter_uses_band_estimate(tmp_path):
+    """'저/중/고' 밴드 매물은 총층 3등분 추정층으로 '최소 층' 필터에 노출된다."""
+    from myhouse.web.queries import Filters, build_cluster_rows
+
+    db = tmp_path / "band.db"
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "app": {"db_path": str(db), "request_delay_seconds": [0, 0]},
+                "defaults": {"trade_types": ["SALE"]},
+                "targets": [{"kind": "complex", "complex_no": "111", "label": "테스트단지"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_path)
+    engine = make_engine(db)
+    init_db(engine)
+    # 15층 단지: 고=11~15(추정13) · 저=1~5(추정3) · 숫자 12층
+    fr = FetchResult(
+        "111",
+        [
+            make_dto("hi", area_name="82A", floor_num=None, floor_info="고/15"),
+            make_dto("lo", area_name="84B", floor_num=None, floor_info="저/15"),
+            make_dto("num", area_name="59C", floor_num=12, price_deal=200000),
+        ],
+        complete=True,
+        raw_count=3,
+    )
+    run_collection(cfg, Settings(), engine, client=FakeClient([fr]))
+
+    with get_session(engine) as session:
+        # floor_min=10: 고(13)·숫자(12) 통과, 저(3) 탈락
+        rows = build_cluster_rows(session, Filters(floor_min=10), None)
+        urls = {r.article_url.rsplit("/", 1)[-1] for r in rows}
+        assert "hi" in urls and "num" in urls and "lo" not in urls
+        # floor_min=14: 추정 13인 고도 탈락(추정의 한계), 숫자 12도 탈락
+        rows = build_cluster_rows(session, Filters(floor_min=14), None)
+        assert rows == []
+        # 필터 없으면 셋 다 노출
+        rows = build_cluster_rows(session, Filters(), None)
+        assert len(rows) == 3
 
 
 def test_filters_smoke(tmp_path):

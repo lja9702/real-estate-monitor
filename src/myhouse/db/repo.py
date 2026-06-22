@@ -6,10 +6,12 @@ from sqlmodel import Session, select
 
 from ..constants import SOURCE_TELEGRAM, RunStatus, now_kst, to_iso
 from .models import (
+    Auction,
     Complex,
     Curation,
     Deal,
     DiscoverCandidate,
+    FlashDeal,
     LandPermit,
     Listing,
     Run,
@@ -164,9 +166,78 @@ def get_deals_for_complex(session: Session, complex_no: str) -> list[Deal]:
     return list(session.exec(select(Deal).where(Deal.complex_no == complex_no)))
 
 
+# ── FlashDeal (급매) ──────────────────────────────────────────────────────────
+def add_flash_deals(session: Session, signals: list, *, run_id: int, now: str) -> int:
+    """급매 신호(core.flash.FlashSignal 목록)를 적재한다. 커밋은 호출측(_collect_one)이 한다.
+
+    article_no 가 이미 있으면 skip — 급매는 '첫 발생'만 박제한다(현재가/상태는 listing 조인으로 본다).
+    실제 적재한 신규 건수를 반환한다.
+    """
+    if not signals:
+        return 0
+    # 같은 회차의 신규 매물(부모)을 먼저 반영한다. flash_deal.article_no 는 listing 의 FK 인데
+    # PK=FK 컬럼이라 SQLAlchemy 가 같은 flush 에서 listing→flash_deal 삽입 순서를 보장하지 못한다.
+    session.flush()
+    added = 0
+    for sig in signals:
+        if session.get(FlashDeal, sig.article_no) is not None:
+            continue
+        session.add(
+            FlashDeal(
+                article_no=sig.article_no,
+                complex_no=sig.complex_no,
+                cluster_key=sig.cluster_key,
+                trade_type=sig.trade_type,
+                area_excl=sig.area_excl,
+                area_key=sig.area_key,
+                price_deal=sig.price_deal,
+                prior_floor=sig.prior_floor,
+                drop_amount=sig.drop_amount,
+                drop_pct=sig.drop_pct,
+                trigger=sig.trigger,
+                detected_at=now,
+                detected_run_id=run_id,
+                notified=False,
+            )
+        )
+        added += 1
+    return added
+
+
+def get_flash_deals_for_complex(session: Session, complex_no: str) -> list[FlashDeal]:
+    return list(session.exec(select(FlashDeal).where(FlashDeal.complex_no == complex_no)))
+
+
 # ── LandPermit (토지거래허가) ──────────────────────────────────────────────────
 def get_permits_for_complex(session: Session, complex_no: str) -> list[LandPermit]:
     return list(session.exec(select(LandPermit).where(LandPermit.complex_no == complex_no)))
+
+
+# ── Auction (법원경매) ────────────────────────────────────────────────────────
+def get_auctions_for_complex(session: Session, complex_no: str) -> list[Auction]:
+    return list(session.exec(select(Auction).where(Auction.complex_no == complex_no)))
+
+
+def purge_old_auctions(session: Session, cutoff_date: str) -> int:
+    """매각기일(sale_date)이 cutoff_date(YYYY-MM-DD) 이전인 지난 경매를 삭제. 삭제 건수 반환.
+
+    수집은 미래 매각기일만 가져오므로(begin=오늘) 매각기일이 지나면 그 행은 더는 갱신되지
+    않고 '지난 경매'로 고정된다. 이를 보관기간(auctions.retention_days)만 남기고 정리한다.
+    매각기일 미상(sale_date is None)인 행은 나이를 알 수 없어 보존한다.
+    """
+    stale = list(
+        session.exec(
+            select(Auction).where(
+                Auction.sale_date != None,  # noqa: E711
+                Auction.sale_date < cutoff_date,
+            )
+        )
+    )
+    for row in stale:
+        session.delete(row)
+    if stale:
+        session.commit()
+    return len(stale)
 
 
 def list_complexes_missing_jibun(session: Session) -> list[Complex]:

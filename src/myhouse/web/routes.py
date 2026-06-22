@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlmodel import Session
 
 from ..constants import SOURCE_WEB
@@ -16,17 +16,26 @@ from ..core import on_demand
 from ..db import repo
 from ..db.engine import get_meta
 from .queries import (
+    AuctionFilters,
     DealFilters,
     Filters,
+    FlashFilters,
     PermitFilters,
     address_option_map,
+    auction_address_option_map,
+    auction_complexes,
     build_area_group_rows,
+    build_auction_rows,
     build_cluster_rows,
     build_deal_rows,
+    build_flash_rows,
     build_permit_rows,
     complex_stats,
     deal_address_option_map,
     deal_complexes,
+    filter_domains,
+    flash_address_option_map,
+    flash_complexes,
     get_map_complexes,
     list_complexes_filtered,
     list_starred_complex_rows,
@@ -104,6 +113,10 @@ def _last_permit_run_id(session: Session) -> int | None:
     return _i(get_meta(session, "last_permit_run_id"))
 
 
+def _last_auction_run_id(session: Session) -> int | None:
+    return _i(get_meta(session, "last_auction_run_id"))
+
+
 def get_deal_filters(request: Request) -> DealFilters:
     qp = request.query_params
 
@@ -150,6 +163,45 @@ def get_permit_filters(request: Request) -> PermitFilters:
     )
 
 
+def get_auction_filters(request: Request) -> AuctionFilters:
+    qp = request.query_params
+
+    def g(k: str) -> str | None:
+        v = qp.get(k)
+        return v if v not in (None, "") else None
+
+    return AuctionFilters(
+        complex_no=g("complex_no"),
+        gu=g("gu"),
+        q=g("q"),
+        sort=g("sort") or "date_asc",
+    )
+
+
+def get_flash_filters(request: Request) -> FlashFilters:
+    qp = request.query_params
+
+    def g(k: str) -> str | None:
+        v = qp.get(k)
+        return v if v not in (None, "") else None
+
+    return FlashFilters(
+        complex_no=g("complex_no"),
+        gu=g("gu"),
+        dong=g("dong"),
+        trade_type=g("trade_type"),
+        days=_i(g("days")) or 30,
+        trigger=g("trigger"),
+        include_inactive=qp.get("include_inactive") in ("on", "true", "1"),
+        q=g("q"),
+        sort=g("sort") or "drop_pct_desc",
+        households_min=_i(g("households_min")),
+        households_max=_i(g("households_max")),
+        year_min=_i(g("year_min")),
+        year_max=_i(g("year_max")),
+    )
+
+
 def _tpl(request: Request):
     return request.app.state.templates
 
@@ -178,73 +230,33 @@ def index(
 
 
 @router.get("/shortlist")
-def shortlist(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    rows = list_starred_complex_rows(session, _last_run_id(session))
-    ctx = {"request": request, "rows": rows, "title": "관심 단지"}
-    return _tpl(request).TemplateResponse(request, "shortlist.html", ctx)
+def shortlist():
+    return RedirectResponse("/app/shortlist", status_code=302)
 
 
 @router.get("/deals")
-def deals(
-    request: Request,
-    f: DealFilters = Depends(get_deal_filters),
-    session: Session = Depends(get_session_dep),
-):
-    rows = build_deal_rows(session, f, _last_deal_run_id(session))
-    ctx = {
-        "request": request,
-        "rows": rows,
-        "complexes": deal_complexes(session),
-        "gu_dong_map": deal_address_option_map(session),
-        "f": f,
-        "new_count": sum(1 for r in rows if r.is_new),
-        "total": len(rows),
-        "title": "실거래가",
-    }
-    return _tpl(request).TemplateResponse(request, "deals.html", ctx)
+def deals():
+    return RedirectResponse("/app/deals", status_code=302)
 
 
 @router.get("/permits")
-def permits(
-    request: Request,
-    f: PermitFilters = Depends(get_permit_filters),
-    session: Session = Depends(get_session_dep),
-):
-    rows = build_permit_rows(session, f, _last_permit_run_id(session))
-    ctx = {
-        "request": request,
-        "rows": rows,
-        "complexes": permit_complexes(session),
-        "gu_list": sorted(permit_address_option_map(session).keys()),
-        "f": f,
-        "new_count": sum(1 for r in rows if r.is_new),
-        "total": len(rows),
-        "title": "토지거래허가",
-    }
-    return _tpl(request).TemplateResponse(request, "permits.html", ctx)
+def permits():
+    return RedirectResponse("/app/permits", status_code=302)
+
+
+@router.get("/auctions")
+def auctions():
+    return RedirectResponse("/app/auctions", status_code=302)
+
+
+@router.get("/flash")
+def flash():
+    return RedirectResponse("/app/flash", status_code=302)
 
 
 @router.get("/complex/{complex_no}")
-def complex_detail(
-    complex_no: str,
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    stat = complex_stats(session, complex_no)
-    f = Filters(complex_no=complex_no, status="all", sort="price_asc")
-    rows = build_cluster_rows(session, f, _last_run_id(session))
-    deal_rows = recent_deals_for_complex(session, complex_no, _last_deal_run_id(session))
-    ctx = {
-        "request": request,
-        "stat": stat,
-        "rows": rows,
-        "deal_rows": deal_rows,
-        "title": stat.name,
-    }
-    return _tpl(request).TemplateResponse(request, "complex_detail.html", ctx)
+def complex_detail(complex_no: str):
+    return RedirectResponse(f"/app/complex/{complex_no}", status_code=302)
 
 
 @router.get("/listing/{cluster_key}/history")
@@ -264,27 +276,13 @@ def listing_history(
 
 
 @router.get("/runs")
-def runs(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    ctx = {"request": request, "runs": recent_runs(session), "title": "실행 로그"}
-    return _tpl(request).TemplateResponse(request, "runs.html", ctx)
+def runs():
+    return RedirectResponse("/app/runs", status_code=302)
 
 
 @router.get("/complexes")
-def complexes_page(
-    request: Request,
-    session: Session = Depends(get_session_dep),
-):
-    rows = list_tracking_rows(session)
-    ctx = {
-        "request": request,
-        "tracked": [r for r in rows if r.is_active],
-        "untracked": [r for r in rows if not r.is_active],
-        "title": "추적 단지",
-    }
-    return _tpl(request).TemplateResponse(request, "complexes.html", ctx)
+def complexes_page():
+    return RedirectResponse("/app/complexes", status_code=302)
 
 
 # ── 큐레이션 (JSON 응답, JS 로 즉시 반영) ─────────────────────────────────
@@ -313,11 +311,8 @@ def set_memo(
 
 # ── 지도 ───────────────────────────────────────────────────────────────────
 @router.get("/map")
-def map_view(request: Request):
-    s = getattr(request.app.state, "settings", None)
-    naver_key = (s.naver_map_client_id or "") if s else ""
-    ctx = {"request": request, "title": "지도", "naver_map_key": naver_key}
-    return _tpl(request).TemplateResponse(request, "map.html", ctx)
+def map_view():
+    return RedirectResponse("/app/map", status_code=302)
 
 
 @router.get("/api/map-data")
@@ -329,14 +324,174 @@ def map_data(
     return [dataclasses.asdict(r) for r in rows]
 
 
+@router.get("/api/config")
+def api_config(request: Request):
+    s = getattr(request.app.state, "settings", None)
+    return {"naver_map_client_id": (s.naver_map_client_id or None) if s else None}
+
+
+# ── JSON API ──────────────────────────────────────────────────────────────
+
+@router.get("/api/listings")
+def api_listings(
+    filters: Filters = Depends(get_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_area_group_rows(session, filters, _last_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in list_complexes_filtered(session, filters.gu, filters.dong)
+        ],
+        "gu_dong_map": address_option_map(session),
+    }
+
+
+@router.get("/api/filter-domains")
+def api_filter_domains(session: Session = Depends(get_session_dep)):
+    return dataclasses.asdict(filter_domains(session))
+
+
+@router.get("/api/listing/{cluster_key}/history")
+def api_listing_history(cluster_key: str, session: Session = Depends(get_session_dep)):
+    pts = price_history(session, cluster_key)
+    return {"points": [dataclasses.asdict(p) for p in pts], "spark": sparkline(pts)}
+
+
+@router.get("/api/complex/{complex_no}")
+def api_complex_detail(complex_no: str, session: Session = Depends(get_session_dep)):
+    stat = complex_stats(session, complex_no)
+    f = Filters(complex_no=complex_no, status="all", sort="price_asc")
+    rows = build_cluster_rows(session, f, _last_run_id(session))
+    deals = recent_deals_for_complex(session, complex_no, _last_deal_run_id(session))
+    auctions = build_auction_rows(
+        session, AuctionFilters(complex_no=complex_no), _last_auction_run_id(session)
+    )
+    return {
+        "stat": dataclasses.asdict(stat),
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "deals": [dataclasses.asdict(d) for d in deals],
+        "auctions": [dataclasses.asdict(a) for a in auctions],
+    }
+
+
+@router.get("/api/deals")
+def api_deals(
+    f: DealFilters = Depends(get_deal_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_deal_rows(session, f, _last_deal_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in deal_complexes(session)
+        ],
+        "gu_dong_map": deal_address_option_map(session),
+    }
+
+
+@router.get("/api/permits")
+def api_permits(
+    f: PermitFilters = Depends(get_permit_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_permit_rows(session, f, _last_permit_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in permit_complexes(session)
+        ],
+        "gu_list": sorted(permit_address_option_map(session).keys()),
+    }
+
+
+@router.get("/api/auctions")
+def api_auctions(
+    f: AuctionFilters = Depends(get_auction_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_auction_rows(session, f, _last_auction_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in auction_complexes(session)
+        ],
+        "gu_list": sorted(auction_address_option_map(session).keys()),
+    }
+
+
+@router.get("/api/flash")
+def api_flash(
+    f: FlashFilters = Depends(get_flash_filters),
+    session: Session = Depends(get_session_dep),
+):
+    rows = build_flash_rows(session, f, _last_run_id(session))
+    return {
+        "rows": [dataclasses.asdict(r) for r in rows],
+        "total": len(rows),
+        "new_count": sum(1 for r in rows if r.is_new),
+        "complexes": [
+            {"complex_no": c.complex_no, "name": c.name or c.complex_no}
+            for c in flash_complexes(session)
+        ],
+        "gu_dong_map": flash_address_option_map(session),
+    }
+
+
+@router.get("/api/runs")
+def api_runs(session: Session = Depends(get_session_dep)):
+    runs = recent_runs(session)
+    return {"runs": [{**r.model_dump(), "status": r.status.value} for r in runs]}
+
+
+@router.get("/api/shortlist")
+def api_shortlist(session: Session = Depends(get_session_dep)):
+    rows = list_starred_complex_rows(session, _last_run_id(session))
+    return {"rows": [dataclasses.asdict(r) for r in rows]}
+
+
+@router.get("/api/complexes")
+def api_complexes(session: Session = Depends(get_session_dep)):
+    rows = list_tracking_rows(session)
+    return {"rows": [dataclasses.asdict(r) for r in rows]}
+
+
 # ── 지금 수집 ──────────────────────────────────────────────────────────────
+# 백그라운드로 띄운 수집 자식 프로세스 핸들. poll() 로 종료분을 회수해 좀비(defunct)를
+# 막는다 — 미회수 좀비는 os.kill(pid,0) 에 살아있다고 응답해 fail_orphan_runs 의 생존
+# 판정을 속이고, 취소(pkill)로 죽은 run 의 자동 정리를 막는다.
+_children: list[subprocess.Popen] = []
+
+
+def _reap_children() -> None:
+    """종료된 자식 프로세스를 회수(poll 이 waitpid 호출)."""
+    for p in _children[:]:
+        if p.poll() is not None:
+            _children.remove(p)
+
+
+def _spawn(cmd: list[str]) -> None:
+    """수집 자식 프로세스를 띄우고 핸들을 추적. 직전에 종료분을 회수."""
+    _reap_children()
+    _children.append(subprocess.Popen(cmd, cwd=os.getcwd()))
+
+
 @router.post("/run")
 def run_now():
     try:
-        subprocess.Popen(
-            [sys.executable, "-m", "myhouse.cli", "collect", "--trigger", "manual"],
-            cwd=os.getcwd(),
-        )
+        _spawn([sys.executable, "-m", "myhouse.cli", "collect", "--trigger", "manual"])
     except OSError as e:
         return JSONResponse({"started": False, "error": str(e)}, status_code=500)
     return {"started": True}
@@ -345,10 +500,7 @@ def run_now():
 @router.post("/run-deals")
 def run_deals_now():
     try:
-        subprocess.Popen(
-            [sys.executable, "-m", "myhouse.cli", "collect-deals", "--trigger", "manual"],
-            cwd=os.getcwd(),
-        )
+        _spawn([sys.executable, "-m", "myhouse.cli", "collect-deals", "--trigger", "manual"])
     except OSError as e:
         return JSONResponse({"started": False, "error": str(e)}, status_code=500)
     return {"started": True}
@@ -357,13 +509,34 @@ def run_deals_now():
 @router.post("/run-permits")
 def run_permits_now():
     try:
-        subprocess.Popen(
-            [sys.executable, "-m", "myhouse.cli", "collect-permits", "--trigger", "manual"],
-            cwd=os.getcwd(),
-        )
+        _spawn([sys.executable, "-m", "myhouse.cli", "collect-permits", "--trigger", "manual"])
     except OSError as e:
         return JSONResponse({"started": False, "error": str(e)}, status_code=500)
     return {"started": True}
+
+
+@router.post("/run-auctions")
+def run_auctions_now():
+    try:
+        _spawn([sys.executable, "-m", "myhouse.cli", "collect-auctions", "--trigger", "manual"])
+    except OSError as e:
+        return JSONResponse({"started": False, "error": str(e)}, status_code=500)
+    return {"started": True}
+
+
+@router.post("/run-cancel")
+def run_cancel():
+    """실행 중인 수집 프로세스(collect·collect-deals·collect-permits)를 모두 종료."""
+    try:
+        result = subprocess.run(
+            ["pkill", "-f", "myhouse.cli collect"],
+            capture_output=True,
+        )
+        _reap_children()  # 종료분 회수(미종료분은 SIGTERM 핸들러가 run 을 FAILED 로 정리)
+        # pkill: 0 = 프로세스 종료됨, 1 = 매칭 없음
+        return {"cancelled": result.returncode == 0}
+    except OSError as e:
+        return JSONResponse({"cancelled": False, "error": str(e)}, status_code=500)
 
 
 # ── 추적 단지 추가/제거 (JSON 응답) ──────────────────────────────────────────
@@ -377,7 +550,7 @@ def _spawn_add_collect(complex_no: str, alias: str | None) -> bool:
     if alias:
         cmd += ["--alias", alias]
     try:
-        subprocess.Popen(cmd, cwd=os.getcwd())
+        _spawn(cmd)
         return True
     except OSError:
         return False

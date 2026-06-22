@@ -36,10 +36,16 @@ def make_dto(
     area_excl: float | None = 81.0,
     area_name: str | None = "82A",
     floor_num: int | None = 12,
+    floor_info: str | None = None,
     direction: str | None = "남향",
 ) -> ArticleDTO:
-    """테스트용 ArticleDTO 헬퍼 (cluster_key 자동 계산)."""
-    ck = compute_cluster_key(complex_no, area_name, floor_num, None, direction, trade_type)
+    """테스트용 ArticleDTO 헬퍼 (cluster_key 자동 계산).
+
+    floor_info 를 명시하면 그대로 쓴다('고/15' 같은 밴드 매물 테스트용). 미지정 시
+    숫자층이면 'N/15', 둘 다 없으면 None.
+    """
+    fi = floor_info if floor_info is not None else (f"{floor_num}/15" if floor_num is not None else None)
+    ck = compute_cluster_key(complex_no, area_name, floor_num, fi, direction, trade_type)
     return ArticleDTO(
         article_no=article_no,
         complex_no=complex_no,
@@ -49,7 +55,7 @@ def make_dto(
         area_excl=area_excl,
         area_supply=None,
         area_name=area_name,
-        floor_info=f"{floor_num}/15" if floor_num is not None else None,
+        floor_info=fi,
         floor_num=floor_num,
         direction=direction,
         dong="501동",

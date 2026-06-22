@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from tests.conftest import make_dto
 
-from myhouse.constants import RunStatus, now_kst
+from myhouse.constants import RunStatus, TradeType, now_kst
 from myhouse.core.collector import ComplexResult, RunResult
 from myhouse.core.diff import NEW, PRICE_CHANGED, REMOVED, ComplexDiff, DiffOp
+from myhouse.core.flash import FlashSignal
 from myhouse.naver.client import FetchResult
 from myhouse.notify.digest import build_digest
 
@@ -102,3 +103,39 @@ def test_digest_unbounded_matches_global_counts():
     msg = build_digest(_run_result_with_changes(), "http://localhost:8765")
     assert "신규 2" in msg and "가격변동 1" in msg and "거래완료 1" in msg
     assert "🎯" not in msg  # 밴드 라벨 없음
+
+
+# ── 🔥 급매 섹션 ──────────────────────────────────────────────────────────────
+def _run_result_with_flash() -> RunResult:
+    d = make_dto("3", price_deal=110000)  # 신규이자 급매(하한 12억 대비 11억)
+    cdiff = ComplexDiff("111", True, [DiffOp(NEW, "3", d.cluster_key, dto=d)])
+    sig = FlashSignal(
+        article_no="3", complex_no="111", cluster_key=d.cluster_key,
+        trade_type=TradeType.SALE, area_excl=81.0, area_key=81, price_deal=110000,
+        prior_floor=120000, drop_amount=10000, drop_pct=8.33, trigger="new",
+    )
+    cr = ComplexResult(
+        complex_no="111", label="테스트단지", name="한솔마을주공5단지",
+        diff=cdiff, fetch=FetchResult("111", [], complete=True), flash=[sig],
+    )
+    return RunResult(
+        run_id=1, started_at=now_kst(), status=RunStatus.SUCCESS,
+        complexes=[cr], new_count=1, flash_count=1,
+    )
+
+
+def test_digest_flash_section():
+    msg = build_digest(_run_result_with_flash(), "http://localhost:8765")
+    assert "🔥 급매" in msg       # 섹션 헤더
+    assert "🔥급매 1" in msg       # 상단 카운트
+    assert "하한 12억" in msg      # 직전 하한가
+    assert "8.33" in msg          # 하락률
+    assert "[신규]" in msg         # 트리거 태그
+    assert "🆕" in msg             # 급매여도 신규 섹션엔 그대로 남음(부분집합 강조)
+
+
+def test_digest_flash_hidden_when_off():
+    msg = build_digest(_run_result_with_flash(), "http://localhost:8765", show_flash=False)
+    assert msg is not None
+    assert "🔥" not in msg         # 섹션·카운트 모두 숨김
+    assert "🆕" in msg             # 신규는 그대로

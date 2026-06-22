@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     telegram_allowlist: str | None = None  # 봇 명령을 받을 chat_id 화이트리스트(쉼표 구분)
     telegram_join_code: str | None = None  # 초대코드 — /join <코드> 로 셀프 등록(미설정이면 셀프조인 off)
     naver_map_client_id: str | None = None
+    auction1_cookie: str | None = None  # 옥션원 세션 쿠키(딥링크 해석용) — 만료 시 진입점 폴백
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -148,6 +149,46 @@ class PermitsConfig(BaseModel):
         return min(max(v, 1), 62)
 
 
+class AuctionsConfig(BaseModel):
+    """법원경매(courtauction.go.kr 신규시스템) 수집 설정.
+
+    추적단지의 관할법원만 매각기일 윈도우로 조회하고, 지번이 매칭된 아파트 물건만 알린다.
+    물건이 살아 움직이므로 신규·최저가하락을 알린다(기일변경은 옵션). 상세는 옥션원으로 연결.
+    """
+
+    enabled: bool = True
+    days: int = 30  # 매각기일 윈도우(오늘~+N일). 길수록 호출량↑
+    retention_days: int = 90  # 지난 경매 보관 일수 — 매각기일이 이만큼 지나면 삭제(≈3달)
+    scope: Literal["all", "starred"] = "all"  # 전체 추적 단지 | 관심(별표)만
+    max_pages: int = 5  # 법원당 최대 페이지(페이지당 40건) — 차단 회피 상한
+    notify_date_changed: bool = False  # 매각기일 변경도 알릴지(기본: 신규·최저가하락만)
+    notify_on_no_change: bool = False  # 변동 0건이어도 알림 보낼지
+    resolve_auction1: bool = False  # 옥션원 직링크 해석(기본 off — 알림은 법원경매 공식 링크). True+쿠키면 활성
+
+
+class FlashConfig(BaseModel):
+    """급매(같은 평수 호가하한 언더컷) 탐지·표시·알림 설정.
+
+    같은 단지·평수·거래유형의 직전 활성 매물 최저 호가(하한가)보다 일정 비율 이상 낮은
+    매물(신규 또는 가격인하)을 '급매'로 잡는다. 별도 수집 없이 매물 수집(collect)에 얹혀 탐지한다.
+    """
+
+    enabled: bool = True
+    trade_types: list[TradeType] = Field(default_factory=lambda: [TradeType.SALE])
+    min_drop_pct: float = 3.0          # 하한가 대비 최소 하락률(%) — 노이즈 컷
+    min_drop_manwon: int = 0           # 최소 하락액(만원) 추가컷 — 0=미사용
+    include_price_drops: bool = True   # 기존 매물 가격인하로 하한을 깬 것도 급매로
+    notify: bool = True                # 텔레그램 다이제스트에 🔥급매 섹션
+    retention_days: int = 30           # 페이지 기본 노출 기간(발생일 기준)
+
+    @field_validator("trade_types", mode="before")
+    @classmethod
+    def _non_empty(cls, v: Any) -> Any:
+        if v is None or v == []:
+            return [TradeType.SALE]
+        return v
+
+
 class RegionSpec(BaseModel):
     """주간 탐색 대상 지역 1개 — 지도 bbox(+맥락용 cortarNo)."""
 
@@ -205,6 +246,8 @@ class Config(BaseModel):
     defaults: FilterSpec = Field(default_factory=FilterSpec)
     deals: DealsConfig = Field(default_factory=DealsConfig)
     permits: PermitsConfig = Field(default_factory=PermitsConfig)
+    auctions: AuctionsConfig = Field(default_factory=AuctionsConfig)
+    flash: FlashConfig = Field(default_factory=FlashConfig)
     discover: DiscoverConfig = Field(default_factory=DiscoverConfig)
     targets: list[TargetSpec] = Field(default_factory=list)
 

@@ -42,11 +42,16 @@ def _to_int(value: object) -> int | None:
 
 
 def _clean_ymd(value: object) -> str | None:
-    """사용승인일 → 'YYYYMMDD'. 8자리 숫자만 통과(그 외 None)."""
+    """사용승인일/입주예정일 → 숫자만. 8자리(YYYYMMDD·준공) 또는 6자리(YYYYMM·입주예정)만 통과.
+
+    신규 분양권/입주권 단지는 아직 준공 전이라 네이버가 사용승인일(8자리) 대신 입주예정월을
+    6자리(YYYYMM)로 준다(라이브 확인: 광명자이더샵포레나 '202512', 청량리롯데캐슬하이루체
+    '202604'). 자릿수로 준공/입주예정을 구분하므로 정규화하지 않고 원본 자릿수를 보존한다
+    (표시는 format_use_approve, 연도 추출은 앞 4자리라 6/8 모두 동작)."""
     if value is None:
         return None
     s = str(value).strip().replace(".", "").replace("-", "")
-    return s if s.isdigit() and len(s) == 8 else None
+    return s if s.isdigit() and len(s) in (6, 8) else None
 
 
 def parse_complex_meta(payload: dict) -> ComplexMeta:

@@ -1,4 +1,4 @@
-"""실거래 대시보드 스모크 — /deals 라우트·필터·단지상세 섹션."""
+"""실거래 대시보드 스모크 — /deals SPA 셸 + /api/deals JSON·필터·단지상세 섹션."""
 
 from __future__ import annotations
 
@@ -82,17 +82,23 @@ def test_deals_page_smoke(tmp_path):
     cfg_path = _seed(tmp_path)
     client = TestClient(create_app(str(cfg_path)))
 
-    r = client.get("/deals?months=36")
-    assert r.status_code == 200
-    assert "삼호1차" in r.text
-    assert "82A" in r.text
-    assert "신규" in r.text  # first_seen_run_id == last_deal_run_id
+    # /deals 는 SPA 셸로 리다이렉트(200) — 데이터는 /api/deals 가 공급한다.
+    shell = client.get("/deals?months=36")
+    assert shell.status_code == 200
+    assert 'id="root"' in shell.text
 
-    # 기본은 취소 제외 → 취소 거래(2024-12-04)는 안 보임
-    assert "2024-12-04" not in r.text
+    data = client.get("/api/deals?months=36").json()
+    d1 = next(r for r in data["rows"] if r["deal_key"] == "d1")
+    assert d1["complex_name"] == "삼호1차"
+    assert d1["pyeong_name"] == "82A"
+    assert d1["is_new"] is True  # first_seen_run_id == last_deal_run_id
+    assert data["new_count"] >= 1
+
+    # 기본은 취소 제외 → 취소 거래(d2, 2024-12-04)는 안 보임
+    assert all(r["deal_key"] != "d2" for r in data["rows"])
     # 취소포함 시 등장
-    r_cancel = client.get("/deals?months=36&include_cancelled=on")
-    assert "2024-12-04" in r_cancel.text
+    incl = client.get("/api/deals?months=36&include_cancelled=true").json()
+    assert any(r["deal_key"] == "d2" and r["deal_date"] == "2024-12-04" for r in incl["rows"])
 
 
 def test_deals_filters_smoke(tmp_path):
@@ -109,13 +115,13 @@ def test_deals_filters_smoke(tmp_path):
         "?q=삼호",
         "?include_cancelled=on",
     ]:
-        assert client.get("/deals" + qs).status_code == 200
+        assert client.get("/api/deals" + qs).status_code == 200
 
 
 def test_complex_detail_has_deal_section(tmp_path):
     cfg_path = _seed(tmp_path)
     client = TestClient(create_app(str(cfg_path)))
-    r = client.get("/complex/947")
-    assert r.status_code == 200
-    assert "실거래가" in r.text
-    assert "82A" in r.text
+    assert client.get("/complex/947").status_code == 200  # SPA 셸 로드
+    deals = client.get("/api/complex/947").json()["deals"]
+    assert deals  # 단지상세에 실거래 섹션 데이터가 실린다
+    assert any(d["pyeong_name"] == "82A" for d in deals)

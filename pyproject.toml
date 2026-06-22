@@ -30,7 +30,7 @@ myhouse = "myhouse.cli:app"
 packages = ["src/myhouse"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.ruff]

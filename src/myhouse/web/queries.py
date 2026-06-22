@@ -9,13 +9,24 @@ from __future__ import annotations
 import re
 from calendar import monthrange
 from dataclasses import dataclass, field
+from datetime import timedelta
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from ..constants import SOURCE_KO, TRADE_TYPE_KO, ListingStatus, TradeType, now_kst
 from ..core.dedup import price_range
-from ..db.models import Complex, Curation, Deal, LandPermit, Listing, ListingHistory, Run
-from ..util import format_complex_meta
+from ..db.models import (
+    Auction,
+    Complex,
+    Curation,
+    Deal,
+    FlashDeal,
+    LandPermit,
+    Listing,
+    ListingHistory,
+    Run,
+)
+from ..util import area_match_key, estimate_floor_from_band, format_complex_meta
 
 
 @dataclass
@@ -96,6 +107,13 @@ def _text_match(row: ClusterRow, q: str) -> bool:
     return q.lower() in hay
 
 
+def _active_complex_nos(session: Session) -> set[str]:
+    """추적 중(is_active=True)인 단지번호 집합 — 목록/지도/드롭다운에서 추적 해제 단지를 숨길 때 사용."""
+    return set(
+        session.exec(select(Complex.complex_no).where(Complex.is_active == True))  # noqa: E712
+    )
+
+
 def build_cluster_rows(
     session: Session, filters: Filters, last_run_id: int | None
 ) -> list[ClusterRow]:
@@ -105,6 +123,12 @@ def build_cluster_rows(
     if filters.trade_type:
         stmt = stmt.where(Listing.trade_type == filters.trade_type)
     listings = list(session.exec(stmt))
+
+    # 추적 해제(is_active=False)한 단지는 목록에서 숨긴다. 단, 단지 상세(complex_no 지정)는
+    # 추적관리 페이지에서 의도적으로 들어오는 경로라 그대로 보여준다.
+    if filters.complex_no is None:
+        active = _active_complex_nos(session)
+        listings = [lst for lst in listings if lst.complex_no in active]
 
     cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
 
@@ -190,8 +214,11 @@ def _passes(r: ClusterRow, f: Filters) -> bool:
         return False
     if f.area_max is not None and (r.area_excl is None or r.area_excl > f.area_max):
         return False
-    if f.floor_min is not None and (r.floor_num is None or r.floor_num < f.floor_min):
-        return False
+    if f.floor_min is not None:
+        # 숫자층은 그대로, '저/중/고' 밴드 매물은 총층 3등분 추정층으로 비교한다.
+        eff_floor = r.floor_num if r.floor_num is not None else estimate_floor_from_band(r.floor_info)
+        if eff_floor is None or eff_floor < f.floor_min:
+            return False
     if f.direction and (not r.direction or f.direction not in r.direction):
         return False
     if f.gu and (not r.address_short or f.gu not in r.address_short):
@@ -237,7 +264,7 @@ def _neg_date(d: str | None) -> str:
 
 
 def _approve_year(ymd: str | None) -> int | None:
-    """'YYYYMMDD' → 연도 int. 없거나 형식 불일치 시 None."""
+    """'YYYYMMDD'(준공) / 'YYYYMM'(입주예정) → 연도 int. 둘 다 앞 4자리. 없거나 형식 불일치 시 None."""
     if not ymd or len(ymd) < 4 or not ymd[:4].isdigit():
         return None
     return int(ymd[:4])
@@ -362,13 +389,8 @@ class AreaGroupRow:
 
 
 def _area_key(area: float | None) -> int:
-    """전용면적 → 평형 매칭 키 (정수). 매물과 실거래를 잇는 기준.
-
-    네이버 매물은 전용면적을 '버림(floor)'으로 정수화해 저장하고(예: 84.97㎡→84),
-    국토부 실거래는 정밀 소수로 들어온다(84.97). 따라서 실거래도 동일하게 버림해야
-    같은 평형으로 매칭된다. round 를 쓰면 X.9x 평형이 +1 되어(84.97→85) 어긋난다.
-    """
-    return int(area) if area else -1
+    """전용면적 → 평형 매칭 키. 단일 기준은 util.area_match_key (매물·실거래·급매 공통)."""
+    return area_match_key(area)
 
 
 @dataclass
@@ -499,7 +521,12 @@ def _short_address(address: str | None) -> str | None:
 
 def address_option_map(session: Session) -> dict[str, list[str]]:
     """gu → sorted [dong] 매핑. 필터 드롭다운용."""
-    addrs = session.exec(select(Complex.address).where(Complex.address != None)).all()  # noqa: E711
+    addrs = session.exec(
+        select(Complex.address).where(
+            Complex.address != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
     gu_dong: dict[str, set[str]] = {}
     for addr in addrs:
         if not addr:
@@ -521,8 +548,12 @@ def list_complexes(session: Session) -> list[Complex]:
 def list_complexes_filtered(
     session: Session, gu: str | None = None, dong: str | None = None
 ) -> list[Complex]:
-    """gu/dong 조건에 맞는 단지만 반환 (단지 드롭다운 필터링용)."""
-    complexes = list(session.exec(select(Complex).order_by(Complex.name)))
+    """gu/dong 조건에 맞는 단지만 반환 (단지 드롭다운 필터링용). 추적 해제 단지는 제외."""
+    complexes = list(
+        session.exec(
+            select(Complex).where(Complex.is_active == True).order_by(Complex.name)  # noqa: E712
+        )
+    )
     if not gu and not dong:
         return complexes
     result = []
@@ -723,6 +754,11 @@ def build_deal_rows(
         stmt = stmt.where(Deal.cancelled == False)  # noqa: E712
     deals = list(session.exec(stmt))
 
+    # 추적 해제 단지는 목록에서 숨긴다(단지 상세 = complex_no 지정 시는 예외).
+    if f.complex_no is None:
+        active = _active_complex_nos(session)
+        deals = [d for d in deals if d.complex_no in active]
+
     cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
 
     rows: list[DealRow] = []
@@ -809,7 +845,12 @@ def deal_complexes(session: Session) -> list[Complex]:
     nos = set(session.exec(select(Deal.complex_no)).all())
     if not nos:
         return []
-    rows = session.exec(select(Complex).where(Complex.complex_no.in_(nos))).all()
+    rows = session.exec(
+        select(Complex).where(
+            Complex.complex_no.in_(nos),
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
     return sorted(rows, key=lambda c: c.name or c.complex_no)
 
 
@@ -820,7 +861,9 @@ def deal_address_option_map(session: Session) -> dict[str, list[str]]:
         return {}
     addrs = session.exec(
         select(Complex.address).where(
-            Complex.complex_no.in_(nos), Complex.address != None  # noqa: E711
+            Complex.complex_no.in_(nos),
+            Complex.address != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
         )
     ).all()
     gu_dong: dict[str, set[str]] = {}
@@ -853,9 +896,12 @@ class MapComplexRow:
 
 
 def get_map_complexes(session: Session, last_run_id: int | None = None) -> list[MapComplexRow]:
-    """좌표 있는 단지 + 활성 매물 집계 (지도 마커용)."""
+    """좌표 있는 단지 + 활성 매물 집계 (지도 마커용). 추적 해제 단지는 마커에서 제외."""
     complexes = session.exec(
-        select(Complex).where(Complex.lat != None)  # noqa: E711
+        select(Complex).where(
+            Complex.lat != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
+        )
     ).all()
     if not complexes:
         return []
@@ -958,6 +1004,11 @@ def build_permit_rows(
         stmt = stmt.where(LandPermit.job_gbn == f.job_gbn)
     permits = list(session.exec(stmt))
 
+    # 추적 해제 단지는 목록에서 숨긴다(단지 지정 시는 예외).
+    if f.complex_no is None:
+        active = _active_complex_nos(session)
+        permits = [p for p in permits if p.complex_no in active]
+
     cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
 
     rows: list[PermitRow] = []
@@ -1013,8 +1064,57 @@ def permit_complexes(session: Session) -> list[Complex]:
     nos = set(session.exec(select(LandPermit.complex_no)).all())
     if not nos:
         return []
-    rows = session.exec(select(Complex).where(Complex.complex_no.in_(nos))).all()
+    rows = session.exec(
+        select(Complex).where(
+            Complex.complex_no.in_(nos),
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
     return sorted(rows, key=lambda c: c.name or c.complex_no)
+
+
+@dataclass
+class FilterDomains:
+    price_min: int
+    price_max: int
+    area_min: float
+    area_max: float
+    households_min: int
+    households_max: int
+    year_min: int
+    year_max: int
+    floor_max: int
+
+
+def filter_domains(session: Session) -> FilterDomains:
+    r = session.exec(
+        select(
+            func.min(Listing.price_deal), func.max(Listing.price_deal),
+            func.min(Listing.area_excl), func.max(Listing.area_excl),
+            func.min(Listing.floor_num), func.max(Listing.floor_num),
+        ).where(Listing.status != ListingStatus.REMOVED)
+    ).first()
+    cx = session.exec(
+        select(
+            func.min(Complex.total_households), func.max(Complex.total_households),
+            func.min(Complex.use_approve_ymd), func.max(Complex.use_approve_ymd),
+        )
+    ).first()
+
+    def _year(ymd: str | None) -> int | None:
+        return int(ymd[:4]) if ymd else None
+
+    return FilterDomains(
+        price_min=r[0] or 0,
+        price_max=r[1] or 300000,
+        area_min=r[2] or 0.0,
+        area_max=r[3] or 200.0,
+        households_min=cx[0] or 0,
+        households_max=cx[1] or 5000,
+        year_min=_year(cx[2]) or 1970,
+        year_max=_year(cx[3]) or 2025,
+        floor_max=r[5] or 30,
+    )
 
 
 def permit_address_option_map(session: Session) -> dict[str, list[str]]:
@@ -1024,7 +1124,325 @@ def permit_address_option_map(session: Session) -> dict[str, list[str]]:
         return {}
     addrs = session.exec(
         select(Complex.address).where(
-            Complex.complex_no.in_(nos), Complex.address != None  # noqa: E711
+            Complex.complex_no.in_(nos),
+            Complex.address != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
+    gu_dong: dict[str, set[str]] = {}
+    for addr in addrs:
+        if not addr:
+            continue
+        gu_m = re.search(r"\w+구", addr)
+        dong_m = re.search(r"\w+동", addr)
+        if gu_m:
+            gu_dong.setdefault(gu_m.group(), set())
+            if dong_m:
+                gu_dong[gu_m.group()].add(dong_m.group())
+    return {gu: sorted(d) for gu, d in sorted(gu_dong.items())}
+
+
+# ── 법원경매 ─────────────────────────────────────────────────────────────────
+@dataclass
+class AuctionRow:
+    auction_key: str
+    complex_no: str
+    complex_name: str
+    address_short: str | None
+    address: str
+    case_no: str
+    court_name: str | None
+    appraisal_manwon: int | None
+    min_bid_manwon: int | None
+    min_bid_ratio: int | None
+    fail_count: int
+    sale_date: str | None
+    status_code: str | None
+    in_progress: bool
+    court_url: str | None
+    is_new: bool = False
+    starred: bool = False
+
+
+@dataclass
+class AuctionFilters:
+    complex_no: str | None = None
+    gu: str | None = None
+    q: str | None = None
+    sort: str = "date_asc"  # 매각기일 가까운순 기본
+
+
+def build_auction_rows(
+    session: Session, f: AuctionFilters, last_auction_run_id: int | None, limit: int = 500
+) -> list[AuctionRow]:
+    stmt = select(Auction)
+    if f.complex_no:
+        stmt = stmt.where(Auction.complex_no == f.complex_no)
+    auctions = list(session.exec(stmt))
+
+    # 추적 해제 단지는 목록에서 숨긴다(단지 지정 시는 예외).
+    if f.complex_no is None:
+        active = _active_complex_nos(session)
+        auctions = [a for a in auctions if a.complex_no in active]
+
+    cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
+
+    rows: list[AuctionRow] = []
+    for a in auctions:
+        cx = cx_map.get(a.complex_no)
+        addr_short = _short_address(cx.address if cx else None)
+        if f.gu and (not addr_short or f.gu not in addr_short):
+            continue
+        name = cx.name if cx and cx.name else a.complex_no
+        if f.q:
+            hay = " ".join(filter(None, [name, a.address, a.case_no])).lower()
+            if f.q.lower() not in hay:
+                continue
+        rows.append(AuctionRow(
+            auction_key=a.auction_key,
+            complex_no=a.complex_no,
+            complex_name=name,
+            address_short=addr_short,
+            address=a.address or "",
+            case_no=a.case_no,
+            court_name=a.court_name,
+            appraisal_manwon=a.appraisal_manwon,
+            min_bid_manwon=a.min_bid_manwon,
+            min_bid_ratio=a.min_bid_ratio,
+            fail_count=a.fail_count,
+            sale_date=a.sale_date,
+            status_code=a.status_code,
+            in_progress=a.in_progress,
+            court_url=a.court_url,
+            is_new=bool(last_auction_run_id) and a.first_seen_run_id == last_auction_run_id,
+            starred=bool(cx and cx.starred),
+        ))
+
+    if f.sort == "date_desc":
+        rows.sort(key=lambda r: (r.sale_date or ""), reverse=True)
+    elif f.sort == "minbid_asc":
+        rows.sort(key=lambda r: (r.min_bid_manwon if r.min_bid_manwon is not None else 1 << 62))
+    else:  # date_asc — 매각기일 가까운 순(기본)
+        rows.sort(key=lambda r: (r.sale_date or "9999-99-99"))
+    return rows[:limit]
+
+
+def auction_complexes(session: Session) -> list[Complex]:
+    """경매 물건이 1건 이상 있는 단지(필터 드롭다운용)."""
+    nos = set(session.exec(select(Auction.complex_no)).all())
+    if not nos:
+        return []
+    rows = session.exec(
+        select(Complex).where(
+            Complex.complex_no.in_(nos),
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
+    return sorted(rows, key=lambda c: c.name or c.complex_no)
+
+
+def auction_address_option_map(session: Session) -> dict[str, list[str]]:
+    """경매 보유 단지의 gu→[dong] 매핑(필터 gu 목록용)."""
+    nos = set(session.exec(select(Auction.complex_no)).all())
+    if not nos:
+        return {}
+    addrs = session.exec(
+        select(Complex.address).where(
+            Complex.complex_no.in_(nos),
+            Complex.address != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
+    gu_dong: dict[str, set[str]] = {}
+    for addr in addrs:
+        if not addr:
+            continue
+        gu_m = re.search(r"\w+구", addr)
+        if gu_m:
+            gu_dong.setdefault(gu_m.group(), set())
+    return {gu: sorted(d) for gu, d in sorted(gu_dong.items())}
+
+
+# ── 급매(flash) ──────────────────────────────────────────────────────────────
+@dataclass
+class FlashRow:
+    """급매 1건 행 — FlashDeal(발생 시점 맥락) + 현재 listing 상태/링크 + 단지 메타."""
+
+    article_no: str
+    complex_no: str
+    complex_name: str
+    address_short: str | None
+    meta_line: str | None
+    trade_type: TradeType
+    trade_ko: str
+    area_excl: float | None
+    floor_info: str | None
+    price_deal: int        # 급매 발생 당시 가격(만원)
+    prior_floor: int       # 직전 같은 평수 하한가(만원)
+    drop_amount: int       # prior_floor - price_deal
+    drop_pct: float
+    trigger: str           # "new" | "price_drop"
+    trigger_ko: str        # "신규" | "인하"
+    detected_at: str       # 발생 시각(ISO)
+    status: str            # 현재 listing 상태: ACTIVE/PENDING_REMOVAL/REMOVED/GONE
+    article_url: str | None
+    is_new: bool = False
+    total_households: int | None = None
+    use_approve_ymd: str | None = None
+
+
+@dataclass
+class FlashFilters:
+    complex_no: str | None = None
+    gu: str | None = None
+    dong: str | None = None
+    trade_type: str | None = None
+    days: int = 30                  # 최근 N일(발생일 기준)
+    trigger: str | None = None      # new | price_drop
+    include_inactive: bool = False  # 거래완료/미노출(빠진) 급매도 표시
+    q: str | None = None
+    sort: str = "drop_pct_desc"     # drop_pct_desc | drop_amount_desc | detected_desc | price_asc
+    households_min: int | None = None
+    households_max: int | None = None
+    year_min: int | None = None
+    year_max: int | None = None
+
+
+_TRIGGER_KO = {"new": "신규", "price_drop": "인하"}
+
+
+def _days_ago_iso(days: int) -> str:
+    """오늘로부터 N일 전 'YYYY-MM-DD'. detected_at(ISO) 과 문자열 비교용."""
+    return (now_kst().date() - timedelta(days=days)).isoformat()
+
+
+def build_flash_rows(
+    session: Session, f: FlashFilters, last_run_id: int | None, limit: int = 500
+) -> list[FlashRow]:
+    """급매 목록 — FlashDeal 에 현재 listing(상태/층/링크)·단지 메타를 조인.
+
+    기본은 아직 살아있는(ACTIVE) 급매만. include_inactive 면 빠진(거래완료/미노출) 것도 포함.
+    """
+    stmt = select(FlashDeal)
+    if f.complex_no:
+        stmt = stmt.where(FlashDeal.complex_no == f.complex_no)
+    if f.trade_type:
+        stmt = stmt.where(FlashDeal.trade_type == f.trade_type)
+    if f.days:
+        stmt = stmt.where(FlashDeal.detected_at >= _days_ago_iso(f.days))
+    if f.trigger:
+        stmt = stmt.where(FlashDeal.trigger == f.trigger)
+    flashes = list(session.exec(stmt))
+
+    # 추적 해제 단지는 목록에서 숨긴다(단지 지정 시는 예외).
+    if f.complex_no is None:
+        active = _active_complex_nos(session)
+        flashes = [fl for fl in flashes if fl.complex_no in active]
+    if not flashes:
+        return []
+
+    article_nos = [fl.article_no for fl in flashes]
+    listings = {
+        lst.article_no: lst
+        for lst in session.exec(select(Listing).where(Listing.article_no.in_(article_nos)))
+    }
+    cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
+
+    rows: list[FlashRow] = []
+    for fl in flashes:
+        lst = listings.get(fl.article_no)
+        cx = cx_map.get(fl.complex_no)
+        rows.append(FlashRow(
+            article_no=fl.article_no,
+            complex_no=fl.complex_no,
+            complex_name=(cx.name if cx and cx.name else fl.complex_no),
+            address_short=_short_address(cx.address if cx else None),
+            meta_line=format_complex_meta(
+                households=cx.total_households if cx else None,
+                dong_count=cx.total_dong_count if cx else None,
+                use_approve_ymd=cx.use_approve_ymd if cx else None,
+                floor_area_ratio=cx.floor_area_ratio if cx else None,
+                building_coverage_ratio=cx.building_coverage_ratio if cx else None,
+            ) if cx else None,
+            trade_type=fl.trade_type,
+            trade_ko=TRADE_TYPE_KO.get(fl.trade_type, fl.trade_type.value),
+            area_excl=fl.area_excl,
+            floor_info=lst.floor_info if lst else None,
+            price_deal=fl.price_deal,
+            prior_floor=fl.prior_floor,
+            drop_amount=fl.drop_amount,
+            drop_pct=fl.drop_pct,
+            trigger=fl.trigger,
+            trigger_ko=_TRIGGER_KO.get(fl.trigger, fl.trigger),
+            detected_at=fl.detected_at,
+            status=lst.status.value if lst else "GONE",
+            article_url=lst.article_url if lst else None,
+            is_new=bool(last_run_id) and fl.detected_run_id == last_run_id,
+            total_households=cx.total_households if cx else None,
+            use_approve_ymd=cx.use_approve_ymd if cx else None,
+        ))
+
+    rows = [r for r in rows if _flash_passes(r, f)]
+    _sort_flash(rows, f.sort)
+    return rows[:limit]
+
+
+def _flash_passes(r: FlashRow, f: FlashFilters) -> bool:
+    if not f.include_inactive and r.status != "ACTIVE":
+        return False
+    if f.gu and (not r.address_short or f.gu not in r.address_short):
+        return False
+    if f.dong and (not r.address_short or f.dong not in r.address_short):
+        return False
+    if f.q and f.q.lower() not in (r.complex_name or "").lower():
+        return False
+    if f.households_min is not None and (r.total_households is None or r.total_households < f.households_min):
+        return False
+    if f.households_max is not None and (r.total_households is None or r.total_households > f.households_max):
+        return False
+    yr = _approve_year(r.use_approve_ymd)
+    if f.year_min is not None and (yr is None or yr < f.year_min):
+        return False
+    if f.year_max is not None and (yr is None or yr > f.year_max):
+        return False
+    return True
+
+
+def _sort_flash(rows: list[FlashRow], sort: str) -> None:
+    if sort == "drop_amount_desc":
+        rows.sort(key=lambda r: r.drop_amount, reverse=True)
+    elif sort == "detected_desc":
+        rows.sort(key=lambda r: r.detected_at, reverse=True)
+    elif sort == "price_asc":
+        rows.sort(key=lambda r: r.price_deal)
+    else:  # drop_pct_desc — 하락률 큰 순(기본)
+        rows.sort(key=lambda r: r.drop_pct, reverse=True)
+
+
+def flash_complexes(session: Session) -> list[Complex]:
+    """급매가 1건 이상 있는 단지(필터 드롭다운용)."""
+    nos = set(session.exec(select(FlashDeal.complex_no)).all())
+    if not nos:
+        return []
+    rows = session.exec(
+        select(Complex).where(
+            Complex.complex_no.in_(nos),
+            Complex.is_active == True,  # noqa: E712
+        )
+    ).all()
+    return sorted(rows, key=lambda c: c.name or c.complex_no)
+
+
+def flash_address_option_map(session: Session) -> dict[str, list[str]]:
+    """급매 보유 단지의 gu→[dong] 매핑 (필터용)."""
+    nos = set(session.exec(select(FlashDeal.complex_no)).all())
+    if not nos:
+        return {}
+    addrs = session.exec(
+        select(Complex.address).where(
+            Complex.complex_no.in_(nos),
+            Complex.address != None,  # noqa: E711
+            Complex.is_active == True,  # noqa: E712
         )
     ).all()
     gu_dong: dict[str, set[str]] = {}
