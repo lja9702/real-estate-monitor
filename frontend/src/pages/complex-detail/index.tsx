@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { complexKeys, getComplex } from '@/entities/complex/api/get-complex'
 import type { ComplexRow, DealRow } from '@/entities/complex/model/types'
+import type { AuctionRow } from '@/entities/auction/model/types'
 import { Badge } from '@/components/ui/badge'
 import {
   Table,
@@ -124,6 +125,124 @@ function DealTable({ deals }: { deals: DealRow[] }) {
   )
 }
 
+function AuctionTable({ auctions, past }: { auctions: AuctionRow[]; past?: boolean }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="whitespace-nowrap">매각기일</TableHead>
+            <TableHead className="text-right whitespace-nowrap">감정가</TableHead>
+            <TableHead className="text-right whitespace-nowrap">최저가</TableHead>
+            <TableHead className="whitespace-nowrap">유찰</TableHead>
+            <TableHead className="whitespace-nowrap">사건 / 법원</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {auctions.map((a) => (
+            <TableRow key={a.auction_key} className={past ? 'opacity-60' : ''}>
+              <TableCell className="whitespace-nowrap tabular-nums">
+                {a.sale_date?.replace(/-/g, '.') ?? '-'}
+                {a.is_new && !past && (
+                  <Badge variant="default" className="ml-1.5 h-4 px-1 text-[10px]">
+                    신규
+                  </Badge>
+                )}
+              </TableCell>
+              <TableCell className="text-right whitespace-nowrap tabular-nums">
+                {formatManwon(a.appraisal_manwon)}
+              </TableCell>
+              <TableCell className="text-right whitespace-nowrap tabular-nums">
+                {formatManwon(a.min_bid_manwon)}
+                {a.min_bid_ratio != null && (
+                  <span
+                    className={`ml-1 text-xs ${a.min_bid_ratio < 100 ? 'text-destructive' : 'text-muted-foreground'}`}
+                  >
+                    {a.min_bid_ratio}%
+                  </span>
+                )}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-sm">
+                {a.fail_count > 0 ? `${a.fail_count}회` : '신건'}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-sm">
+                {a.court_url ? (
+                  <a
+                    href={a.court_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-muted-foreground hover:underline"
+                  >
+                    {a.case_no} ↗
+                  </a>
+                ) : (
+                  a.case_no
+                )}
+                {a.court_name && (
+                  <div className="text-xs text-muted-foreground">{a.court_name}</div>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+// 브라우저 로컬 기준 오늘(YYYY-MM-DD) — 매각기일(sale_date)과 문자열 비교해 진행중/지난을 가른다.
+function todayLocal(): string {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+export function AuctionSection({ auctions }: { auctions: AuctionRow[] }) {
+  const today = todayLocal()
+  // 진행중 = 매각기일 미래/미정, 지난 = 매각기일이 오늘 이전(보관기간 내 = 최근 3개월).
+  const ongoing = auctions
+    .filter((a) => !a.sale_date || a.sale_date >= today)
+    .sort((a, b) => (a.sale_date ?? '9999-99-99').localeCompare(b.sale_date ?? '9999-99-99'))
+  const past = auctions
+    .filter((a) => a.sale_date && a.sale_date < today)
+    .sort((a, b) => (b.sale_date ?? '').localeCompare(a.sale_date ?? ''))
+
+  return (
+    <section>
+      <h2 className="mb-2 text-base font-semibold">경매 ({auctions.length}건)</h2>
+      {auctions.length === 0 ? (
+        <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+          경매 내역 없음
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <div>
+            <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">
+              진행중 ({ongoing.length}건)
+            </h3>
+            {ongoing.length === 0 ? (
+              <p className="rounded-lg border p-4 text-center text-xs text-muted-foreground">
+                진행중인 경매 없음
+              </p>
+            ) : (
+              <AuctionTable auctions={ongoing} />
+            )}
+          </div>
+          {past.length > 0 && (
+            <div>
+              <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">
+                지난 경매 ({past.length}건 · 최근 3개월)
+              </h3>
+              <AuctionTable auctions={past} past />
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function AreaFilterBar({
   areas,
   selected,
@@ -177,6 +296,7 @@ export function ComplexDetailPage() {
 
   const rows = query.data?.rows ?? []
   const deals = query.data?.deals ?? []
+  const auctions = query.data?.auctions ?? []
 
   // 매물·실거래 전체에서 고유 전용면적 목록
   const uniqueAreas = useMemo(() => {
@@ -277,6 +397,9 @@ export function ComplexDetailPage() {
           <DealTable deals={filteredDeals} />
         )}
       </section>
+
+      {/* 경매 목록 (진행중 / 지난 — 최근 3개월 보관) */}
+      <AuctionSection auctions={auctions} />
     </div>
   )
 }

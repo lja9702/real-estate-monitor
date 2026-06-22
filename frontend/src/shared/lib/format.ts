@@ -35,7 +35,7 @@ export function formatAreaWithPyeong(m2: number | null | undefined): string {
   return `${m2Str} (${Math.round(m2 / 3.305785)}평)`
 }
 
-// 'YYYYMMDD' → 연도 정수. 준공연도 표시용.
+// 'YYYYMMDD'(준공) / 'YYYYMM'(분양권 입주예정) → 연도 정수(앞 4자리). 준공·입주연도 표시용.
 export function approveYear(ymd: string | null | undefined): number | null {
   if (!ymd || ymd.length < 4) return null
   const y = Number(ymd.slice(0, 4))

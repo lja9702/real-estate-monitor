@@ -43,10 +43,10 @@ def _app(tmp_path, monkeypatch):
 def test_complexes_page_lists_tracked(tmp_path, monkeypatch):
     app, _engine, _ = _app(tmp_path, monkeypatch)
     client = TestClient(app)
-    r = client.get("/complexes")
-    assert r.status_code == 200
-    assert "고정단지" in r.text
-    assert "추적 추가" in r.text
+    # /complexes 는 SPA 셸로 리다이렉트(200) — 추적 목록은 /api/complexes 가 공급한다.
+    assert client.get("/complexes").status_code == 200
+    rows = client.get("/api/complexes").json()["rows"]
+    assert "고정단지" in {r["name"] for r in rows}
 
 
 def test_add_untrack_retrack_flow(tmp_path, monkeypatch):

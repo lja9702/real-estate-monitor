@@ -38,6 +38,7 @@ if [[ "$PROFILE" == "main" ]]; then
   COLLECTOR_HOUR=8;  COLLECTOR_MINUTE=10
   DEALS_HOUR=9;      DEALS_MINUTE=30
   PERMITS_HOUR=11;   PERMITS_MINUTE=0
+  AUCTIONS_HOUR=11;  AUCTIONS_MINUTE=30
   DISCOVER_HOUR=9;   DISCOVER_MINUTE=0
 else
   LABEL_PREFIX="com.myhouse.$PROFILE"
@@ -45,6 +46,7 @@ else
   COLLECTOR_HOUR=8;  COLLECTOR_MINUTE=40
   DEALS_HOUR=10;     DEALS_MINUTE=0
   PERMITS_HOUR=11;   PERMITS_MINUTE=30
+  AUCTIONS_HOUR=12;  AUCTIONS_MINUTE=0
   DISCOVER_HOUR=9;   DISCOVER_MINUTE=30
 fi
 
@@ -66,6 +68,8 @@ render() {
       -e "s|__DEALS_MINUTE__|$DEALS_MINUTE|g" \
       -e "s|__PERMITS_HOUR__|$PERMITS_HOUR|g" \
       -e "s|__PERMITS_MINUTE__|$PERMITS_MINUTE|g" \
+      -e "s|__AUCTIONS_HOUR__|$AUCTIONS_HOUR|g" \
+      -e "s|__AUCTIONS_MINUTE__|$AUCTIONS_MINUTE|g" \
       -e "s|__DISCOVER_HOUR__|$DISCOVER_HOUR|g" \
       -e "s|__DISCOVER_MINUTE__|$DISCOVER_MINUTE|g" \
       "$SRC/com.myhouse.${job}.plist" > "$DEST/$out"
@@ -97,7 +101,7 @@ reload_agent() {
   return 1
 }
 
-for job in dashboard collector deals permits discover bot; do
+for job in dashboard collector deals permits auctions discover bot; do
   reload_agent "$job" || true
 done
 
@@ -112,6 +116,7 @@ echo "텔레그램 봇:  상시 구동(롱폴링) — 텔레그램에서 /help �
 echo "매물 일정:    매일 ${COLLECTOR_HOUR}:$(printf '%02d' $COLLECTOR_MINUTE) (KST)"
 echo "실거래 일정:  매일 ${DEALS_HOUR}:$(printf '%02d' $DEALS_MINUTE) (KST)"
 echo "토지거래허가: 매일 ${PERMITS_HOUR}:$(printf '%02d' $PERMITS_MINUTE) (KST)"
+echo "법원경매:     매일 ${AUCTIONS_HOUR}:$(printf '%02d' $AUCTIONS_MINUTE) (KST)"
 echo "신규편입 탐색: 매주 월요일 ${DISCOVER_HOUR}:$(printf '%02d' $DISCOVER_MINUTE) (KST)"
 echo "상태 확인:    launchctl list | grep myhouse"
 echo "봇 로그:      tail -f $LOG_DIR/bot.err"

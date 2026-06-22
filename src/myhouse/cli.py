@@ -65,10 +65,17 @@ def collect(
     trigger: str = typer.Option("manual", help="scheduled | manual"),
 ) -> None:
     """매물 1회 수집 → diff → (변화 시) 텔레그램 알림."""
-    from .core.collector import CollectorLocked, RunResult, run_collection
+    from .core.collector import (
+        CollectionInterrupted,
+        CollectorLocked,
+        RunResult,
+        install_term_handler,
+        run_collection,
+    )
     from .notify import telegram
     from .notify.digest import build_digest
 
+    install_term_handler()  # 취소·kill(SIGTERM) 시 run 을 FAILED 로 정리(좀비 방지)
     cfg, settings = _load(config)
     engine = make_engine(cfg.app.db_path)
     init_db(engine)
@@ -78,7 +85,9 @@ def collect(
         log.warning("텔레그램 미설정(.env) — 알림 없이 수집만 합니다.")
 
     def _notify(result: RunResult) -> None:
-        full = build_digest(result, cfg.app.dashboard_url)  # 전체(밴드무관) — 미리보기/하트비트
+        full = build_digest(  # 전체(밴드무관) — 미리보기/하트비트
+            result, cfg.app.dashboard_url, show_flash=cfg.flash.notify
+        )
         typer.echo("\n----- 다이제스트 미리보기(전체) -----")
         typer.echo(_html_to_text(full or ""))
         typer.echo("------------------------------------\n")
@@ -87,7 +96,7 @@ def collect(
             settings,
             lambda lo, hi, only: build_digest(
                 result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
-                only_complexes=only, drop_empty=True,
+                only_complexes=only, drop_empty=True, show_flash=cfg.flash.notify,
             ),
         )
         if notifier is None:
@@ -102,7 +111,7 @@ def collect(
                 settings,
                 lambda lo, hi, only: build_digest(
                     result, cfg.app.dashboard_url, price_min=lo, price_max=hi,
-                    only_complexes=only, drop_empty=True,
+                    only_complexes=only, drop_empty=True, show_flash=cfg.flash.notify,
                 ),
             )
             typer.echo(f"📨 텔레그램 전송 완료({sent}명 — 가격밴드·단지별)")
@@ -111,6 +120,9 @@ def collect(
         result = run_collection(cfg, settings, engine, trigger=trigger, notify=_notify)
     except CollectorLocked as e:
         typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    except CollectionInterrupted as e:
+        typer.secho(f"🛑 {e} — 수집 중단(run 은 FAILED 로 정리됨).", fg="yellow")
         raise typer.Exit(code=0) from None
     finally:
         if notifier is not None:
@@ -130,10 +142,12 @@ def collect_deals(
     trigger: str = typer.Option("manual", help="scheduled | manual"),
 ) -> None:
     """실거래(국토부) 1회 수집 → diff(신규/취소) → (변화 시) 텔레그램 알림."""
+    from .core.collector import CollectionInterrupted, install_term_handler
     from .core.deal_collector import CollectorLocked, DealRunResult, run_deal_collection
     from .notify import telegram
     from .notify.deal_digest import build_deal_digest
 
+    install_term_handler()  # 취소·kill(SIGTERM) 시 run 을 FAILED 로 정리(좀비 방지)
     cfg, settings = _load(config)
     if not cfg.deals.enabled:
         typer.secho("⏸ 실거래 수집 비활성화 (config: deals.enabled=false)", fg="yellow")
@@ -180,6 +194,9 @@ def collect_deals(
     except CollectorLocked as e:
         typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
         raise typer.Exit(code=0) from None
+    except CollectionInterrupted as e:
+        typer.secho(f"🛑 {e} — 수집 중단(run 은 FAILED 로 정리됨).", fg="yellow")
+        raise typer.Exit(code=0) from None
     finally:
         if notifier is not None:
             notifier.close()
@@ -196,11 +213,12 @@ def collect_permits(
     trigger: str = typer.Option("manual", help="scheduled | manual"),
 ) -> None:
     """토지거래허가(서울시) 1회 수집 → diff(신규 허가) → (변화 시) 텔레그램 알림."""
-    from .core.collector import CollectorLocked
+    from .core.collector import CollectionInterrupted, CollectorLocked, install_term_handler
     from .core.permit_collector import PermitRunResult, run_permit_collection
     from .notify import telegram
     from .notify.permit_digest import build_permit_digest
 
+    install_term_handler()  # 취소·kill(SIGTERM) 시 run 을 FAILED 로 정리(좀비 방지)
     cfg, settings = _load(config)
     if not cfg.permits.enabled:
         typer.secho("⏸ 토지거래허가 수집 비활성화 (config: permits.enabled=false)", fg="yellow")
@@ -226,6 +244,9 @@ def collect_permits(
     except CollectorLocked as e:
         typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
         raise typer.Exit(code=0) from None
+    except CollectionInterrupted as e:
+        typer.secho(f"🛑 {e} — 수집 중단(run 은 FAILED 로 정리됨).", fg="yellow")
+        raise typer.Exit(code=0) from None
     finally:
         if notifier is not None:
             notifier.close()
@@ -234,6 +255,86 @@ def collect_permits(
         f"완료: 상태={result.status.value} · 단지 {result.targets_count} · "
         f"자치구 {result.sgg_count} · 신규 허가 {result.new_count} · "
         f"지번미보유 {result.missing_jibun} · 오류 {result.errors}"
+    )
+
+
+def _snapshot_engine(db_path: str):
+    """실DB 를 임시 스냅샷으로 복제해 엔진 반환(dry-run — 원본 무변경·WAL 포함 정합 복제)."""
+    import sqlite3
+    import tempfile
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".auction-dryrun.db", delete=False).name
+    src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(tmp)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    engine = make_engine(tmp)
+    init_db(engine)
+    return engine
+
+
+@app.command(name="collect-auctions")
+def collect_auctions(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    trigger: str = typer.Option("manual", help="scheduled | manual"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="미리보기 — 텔레그램 발송·실DB 쓰기 없음(실DB 스냅샷에서 수집)"
+    ),
+) -> None:
+    """법원경매(courtauction.go.kr) 1회 수집 → diff(신규·최저가하락) → (변화 시) 텔레그램 알림."""
+    from .core.auction_collector import AuctionRunResult, run_auction_collection
+    from .core.collector import CollectionInterrupted, CollectorLocked, install_term_handler
+    from .notify import telegram
+    from .notify.auction_digest import build_auction_digest
+
+    install_term_handler()  # 취소·kill(SIGTERM) 시 run 을 FAILED 로 정리(좀비 방지)
+    cfg, settings = _load(config)
+    if not cfg.auctions.enabled:
+        typer.secho("⏸ 법원경매 수집 비활성화 (config: auctions.enabled=false)", fg="yellow")
+        raise typer.Exit(code=0)
+
+    if dry_run:
+        engine = _snapshot_engine(cfg.app.db_path)  # 실DB 스냅샷 — 발송·원본쓰기 없음
+        notifier = None
+        typer.secho("🔍 dry-run — 발송·실DB쓰기 없이 미리보기만 합니다.", fg="cyan")
+    else:
+        engine = make_engine(cfg.app.db_path)
+        init_db(engine)
+        notifier = telegram.from_settings(settings)
+        if notifier is None:
+            log.warning("텔레그램 미설정(.env) — 알림 없이 수집만 합니다.")
+
+    def _notify(result: AuctionRunResult) -> None:
+        msg = build_auction_digest(result, cfg.app.dashboard_url)
+        typer.echo("\n----- 법원경매 다이제스트 미리보기 -----")
+        typer.echo(_html_to_text(msg))
+        typer.echo("----------------------------------------\n")
+        if notifier is not None:
+            telegram.broadcast(notifier, engine, msg)
+            typer.echo("📨 텔레그램 전송 완료")
+
+    try:
+        result = run_auction_collection(cfg, settings, engine, trigger=trigger, notify=_notify)
+    except CollectorLocked as e:
+        typer.secho(f"⏳ {e} — 건너뜁니다.", fg="yellow")
+        raise typer.Exit(code=0) from None
+    except CollectionInterrupted as e:
+        typer.secho(f"🛑 {e} — 수집 중단(run 은 FAILED 로 정리됨).", fg="yellow")
+        raise typer.Exit(code=0) from None
+    finally:
+        if notifier is not None:
+            notifier.close()
+
+    typer.echo(
+        f"완료: 상태={result.status.value} · 단지 {result.targets_count} · "
+        f"법원 {result.court_count} · 신규 {result.new_count} · "
+        f"최저가하락 {result.price_down_count} · 지번미보유 {result.missing_jibun} · "
+        f"관할미상 {result.unmatched_court} · 오류 {result.errors}"
     )
 
 
@@ -519,6 +620,109 @@ def probe_permits(
         typer.echo(f"  {p.permit_date}  {p.address}  [{jb}]  {p.job_gbn}")
 
 
+@app.command(name="probe-auctions")
+def probe_auctions(
+    court: str = typer.Argument(..., help="법원코드(B000210) 또는 이름(서울중앙)"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    days: int = typer.Option(30, help="매각기일 윈도우(오늘~+N일)"),
+    pages: int = typer.Option(2, help="조회 페이지 수(페이지당 40)"),
+    apt_only: bool = typer.Option(True, "--apt-only/--all-usage", help="아파트만 출력"),
+    limit: int = typer.Option(20, help="출력 건수"),
+) -> None:
+    """법원경매(courtauction.go.kr 신규시스템)를 직접 조회해 연동을 검증(브라우저 불필요)."""
+    import collections
+    from datetime import timedelta
+
+    from .court.client import CourtAuctionClient
+
+    _load(config)
+    now = now_kst()
+    begin_s = now.strftime("%Y%m%d")
+    end_s = (now + timedelta(days=days)).strftime("%Y%m%d")
+
+    typer.echo("🌐 courtauction.go.kr 조회 중…")
+    with CourtAuctionClient() as client:
+        court_map = client.fetch_courts()
+        court_cd = (
+            court.upper()
+            if court.upper().startswith("B")
+            else next((k for k, v in court_map.items() if court in v), "")
+        )
+        if not court_cd:
+            hint = "" if court_map else " (법원목록 조회 실패 — 코드로 지정: 예 B000210)"
+            typer.secho(f"법원을 찾을 수 없습니다: {court}{hint}", fg="red")
+            raise typer.Exit(code=1)
+        auctions = client.fetch_auctions(court_cd, begin_s, end_s, max_pages=pages)
+
+    apt = [a for a in auctions if a.is_apartment]
+    shown = apt if apt_only else auctions
+    name = court_map.get(court_cd, court_cd)
+    typer.echo(f"{name}({court_cd}) {begin_s}~{end_s}: 전체 {len(auctions)}건 · 아파트 {len(apt)}건")
+    dist = collections.Counter(a.usage_name or "?" for a in auctions)
+    typer.echo("용도: " + ", ".join(f"{k} {v}" for k, v in dist.most_common(8)))
+    for a in sorted(shown, key=lambda x: x.sale_date or "")[:limit]:
+        jb = f"{a.bonbun}-{a.bubun}" if a.bonbun else "?"
+        bld = f" {a.building_name}" if a.building_name else ""
+        typer.echo(
+            f"  {a.sale_date}  {a.case_no}  {a.address}{bld}  "
+            f"[{jb}·동{a.dong_code}]  감정 {a.appraisal_manwon}만 · "
+            f"최저 {a.min_bid_manwon}만({a.min_bid_ratio}%) · 유찰 {a.fail_count}"
+        )
+
+
+@app.command(name="probe-auction1")
+def probe_auction1(
+    case_no: str = typer.Argument(..., help="사건번호 예: 2024타경6190"),
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    dump: bool = typer.Option(False, "--dump", help="파싱 실패 시 응답 HTML 일부 출력(구조 확인용)"),
+) -> None:
+    """옥션원 사건검색으로 product_id→직링크 해석 검증(.env AUCTION1_COOKIE 필요·본인 머신에서)."""
+    from .court.auction1_resolver import (
+        fetch_list_html,
+        looks_logged_out,
+        parse_case_no,
+        resolve_view_url,
+    )
+
+    _, settings = _load(config)
+    cookie = settings.auction1_cookie
+    if not cookie:
+        typer.secho("AUCTION1_COOKIE 가 .env 에 없습니다 (옥션원 세션 쿠키 설정 후 재시도).", fg="red")
+        raise typer.Exit(code=1)
+    if parse_case_no(case_no) is None:
+        typer.secho(f"사건번호 형식을 못 읽었습니다: {case_no} (예: 2024타경6190)", fg="red")
+        raise typer.Exit(code=1)
+
+    typer.echo("🌐 옥션원 사건검색 중…")
+    url = resolve_view_url(case_no, cookie)
+    if url:
+        typer.secho(f"✅ {case_no} → {url}", fg="green")
+        return
+
+    typer.secho(f"❌ product_id 미해석: {case_no}", fg="yellow")
+    html = fetch_list_html(case_no, cookie)
+    if html is None:
+        typer.echo("   검색 요청 실패 — 쿠키/네트워크를 확인하세요.")
+        raise typer.Exit(code=1)
+    if looks_logged_out(html):
+        typer.secho("   로그인 만료로 보입니다 — .env AUCTION1_COOKIE 갱신 필요.", fg="yellow")
+    typer.echo(f"   응답 {len(html)}자 · product_id 패턴 미발견.")
+    if dump:
+        import re as _re
+
+        calls = _re.findall(r"[A-Za-z_]\w*\(\s*\d{5,}\s*,[^)]{0,40}", html)
+        typer.echo(f"숫자호출(행 클릭 핸들러) 후보 {len(calls)}개 — 상위 6:")
+        for c in calls[:6]:
+            typer.echo("   " + c)
+        i = html.find("ck_pid")
+        if i >= 0:
+            typer.echo("\n----- ck_pid 주변 HTML -----")
+            typer.echo(html[max(0, i - 150) : i + 250])
+            typer.echo("----------------------------")
+    else:
+        typer.echo("   --dump 로 HTML 구조를 확인해 파서를 맞출 수 있습니다.")
+
+
 @app.command(name="probe-search")
 def probe_search(
     keyword: str = typer.Argument(..., help="검색어(단지명 또는 주소). 예: '방배 삼호1차'"),
@@ -595,13 +799,96 @@ def probe_markers(
     typer.echo(f"\n전체 고유 편입 단지: {len(total)}개")
 
 
+@app.command(name="bulk-import")
+def bulk_import(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    region: str = typer.Option("", help="특정 지역 라벨만(비우면 전체 discover.regions)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="실제 쓰지 않고 추가될 목록만 출력"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
+) -> None:
+    """discover.regions 마커를 수집해 config.yaml targets에 일괄 추가 (이미 있는 단지는 건너뜀)."""
+    cfg, _ = _load(config)
+    from .naver.client import NaverLandClient
+
+    disc = cfg.discover
+    regions = [r for r in disc.regions if not region or r.name == region]
+    if not regions:
+        typer.secho(f"⚠ 탐색 지역이 없습니다(필터: '{region}').", fg="yellow")
+        raise typer.Exit(code=0)
+
+    seed = disc.seed_complex_no or next(
+        (t.complex_no for t in cfg.targets if t.kind == "complex" and t.complex_no), "947"
+    )
+
+    # 이미 config.yaml에 등록된 단지 번호 세트
+    existing_nos: set[str] = {
+        t.complex_no for t in cfg.targets if t.kind == "complex" and t.complex_no
+    }
+
+    typer.echo(
+        f"🌐 헤드리스 브라우저로 토큰 발급(seed={seed}) + 마커 수집 중… "
+        f"(매매 {disc.price_min_manwon:,}~{disc.price_max_manwon:,}만 · 세대수≥{disc.min_households})"
+    )
+
+    to_add: list[tuple[str, str, str]] = []  # (region_name, complex_no, label)
+    with NaverLandClient(
+        request_delay_seconds=cfg.app.request_delay_seconds, headless=headless
+    ) as client:
+        for r in regions:
+            try:
+                markers = client.fetch_markers(r, disc, seed_complex_no=seed)
+            except Exception as e:  # noqa: BLE001
+                typer.secho(f"  {r.name}: 실패 — {e}", fg="red")
+                continue
+            new_here = [m for m in markers if m.complex_no not in existing_nos]
+            typer.echo(f"\n■ {r.name}: 전체 {len(markers)}개 · 신규 {len(new_here)}개")
+            for m in sorted(new_here, key=lambda d: (d.min_deal_price or 0)):
+                typer.echo(
+                    f"    + {m.complex_no}  {m.name}"
+                    f"  {m.min_deal_price:,}~{m.max_deal_price:,}만  {m.total_households}세대"
+                )
+                to_add.append((r.name, m.complex_no, m.name))
+                existing_nos.add(m.complex_no)  # 지역 간 중복 방지
+
+    if not to_add:
+        typer.secho("\n✅ 추가할 신규 단지 없음 (모두 이미 등록됨)", fg="green")
+        return
+
+    typer.echo(f"\n총 {len(to_add)}개 단지를 추가합니다.")
+
+    if dry_run:
+        typer.secho("--dry-run: config.yaml에 쓰지 않습니다.", fg="yellow")
+        return
+
+    # config.yaml 끝에 append (기존 주석·포맷 보존)
+    config_path = Path(config)
+    lines: list[str] = []
+    cur_region = ""
+    for region_name, complex_no, label in to_add:
+        if region_name != cur_region:
+            lines.append(f"  # ── {region_name} (bulk-import) ──\n")
+            cur_region = region_name
+        lines.append(f"  - kind: complex\n    complex_no: \"{complex_no}\"\n    label: \"{label}\"\n")
+
+    with config_path.open("a", encoding="utf-8") as f:
+        f.write("\n")
+        f.writelines(lines)
+
+    typer.secho(f"\n✅ {len(to_add)}개 단지를 {config_path}에 추가 완료", fg="green")
+    typer.echo("이후 'myhouse collect'를 실행하면 전체 수집이 시작됩니다.")
+
+
 @app.command(name="fill-meta")
 def fill_meta(
     config: str = typer.Option("config.yaml", help="설정 파일 경로"),
     limit: int = typer.Option(500, help="처리할 최대 단지 수"),
     headless: bool = typer.Option(True, "--headless/--no-headless", help="브라우저 표시(디버그)"),
 ) -> None:
-    """메타 미설정 단지에 세대수/동수/준공/용적률/건폐율을 일괄 채운다 (Naver 단지 API 호출)."""
+    """메타 비거나 준공/입주일이 빈 단지에 세대수/동수/준공·입주/용적률/건폐율을 채운다 (Naver 단지 API 호출).
+
+    분양권 단지는 예전 파서가 6자리 입주예정일(YYYYMM)을 버려 use_approve_ymd 만 비어있을 수
+    있으므로 floor_area_ratio 뿐 아니라 use_approve_ymd 누락도 대상에 포함한다(부분 백필).
+    """
     from sqlmodel import Session, select
 
     from .db import repo
@@ -614,7 +901,9 @@ def fill_meta(
 
     with Session(engine) as session:
         targets = session.exec(
-            select(Complex).where(Complex.floor_area_ratio == None).limit(limit)  # noqa: E711
+            select(Complex)
+            .where((Complex.floor_area_ratio == None) | (Complex.use_approve_ymd == None))  # noqa: E711
+            .limit(limit)
         ).all()
 
     if not targets:
@@ -627,7 +916,7 @@ def fill_meta(
         for cx in targets:
             meta = client.fetch_complex_meta(cx.complex_no)
             with Session(engine) as session:
-                if meta and meta.floor_area_ratio is not None:
+                if meta and (meta.floor_area_ratio is not None or meta.use_approve_ymd is not None):
                     repo.upsert_complex(
                         session,
                         cx.complex_no,

@@ -1,5 +1,7 @@
 // GET /api/complex/{no} 응답 타입 — 백엔드 ComplexStat/ClusterRow/DealRow 와 1:1 대응.
 
+import type { AuctionRow } from '@/entities/auction/model/types'
+
 export interface ComplexStat {
   complex_no: string
   name: string
@@ -66,6 +68,7 @@ export interface ComplexDetailResponse {
   stat: ComplexStat
   rows: ComplexRow[]
   deals: DealRow[]
+  auctions: AuctionRow[]
 }
 
 export interface StarredComplexRow {

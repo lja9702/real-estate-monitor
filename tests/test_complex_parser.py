@@ -59,8 +59,16 @@ def test_parse_float_ratio_string():
 
 
 def test_parse_bad_ymd_dropped():
+    # 6/8자리만 통과 — 4자리(연도만)·7자리·빈값은 버린다.
     assert parse_complex_meta({"complexDetail": {"useApproveYmd": "1975"}}).use_approve_ymd is None
+    assert parse_complex_meta({"complexDetail": {"useApproveYmd": "2025123"}}).use_approve_ymd is None
     assert parse_complex_meta({"complexDetail": {"useApproveYmd": ""}}).use_approve_ymd is None
+
+
+def test_parse_movein_ymd_kept():
+    # 신규 분양권 단지는 사용승인일 대신 입주예정월을 6자리(YYYYMM)로 준다 — 광명자이더샵포레나 '202512'.
+    assert parse_complex_meta({"complexDetail": {"useApproveYmd": "202512"}}).use_approve_ymd == "202512"
+    assert parse_complex_meta({"complexDetail": {"useApproveYmd": "2025.12"}}).use_approve_ymd == "202512"
 
 
 def test_parse_garbage_inputs():
@@ -86,6 +94,7 @@ def test_format_partial_only_present():
     assert format_complex_meta(households=630) == "630세대"
     assert format_complex_meta(dong_count=8) == "8개동"
     assert format_complex_meta(use_approve_ymd="19990614") == "1999.06 준공"
+    assert format_complex_meta(use_approve_ymd="202512") == "2025.12 입주예정"  # 6자리=분양권 입주예정
     assert format_complex_meta(floor_area_ratio=341) == "용적률 341%"
     assert format_complex_meta(building_coverage_ratio=23) == "건폐율 23%"
 
@@ -101,6 +110,8 @@ def test_format_empty_is_none():
 
 def test_format_use_approve_variants():
     assert format_use_approve("19751128") == "1975.11 준공"
+    assert format_use_approve("202512") == "2025.12 입주예정"  # 6자리(YYYYMM)=분양권 입주예정
+    assert format_use_approve("202500") == "2025년 입주예정"  # 6자리·월 '00' → 연도만
     assert format_use_approve("20200001") == "2020년 준공"  # 월 '00' → 연도만
     assert format_use_approve("2020") == "2020년 준공"  # 월 결손
     assert format_use_approve("") is None

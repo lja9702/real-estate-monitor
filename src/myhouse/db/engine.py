@@ -45,6 +45,7 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
     ("complex", "pyeongs_json", "VARCHAR"),
     ("complex", "deals_fetched_at", "VARCHAR"),
     ("run", "kind", "VARCHAR DEFAULT 'listings'"),
+    ("run", "complexes_done", "INTEGER DEFAULT 0"),
     ("complex", "starred", "BOOLEAN DEFAULT 0"),
     ("complex", "bonbun", "VARCHAR"),
     ("complex", "bubun", "VARCHAR"),

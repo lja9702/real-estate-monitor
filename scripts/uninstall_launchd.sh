@@ -13,7 +13,7 @@ else
   LABEL_PREFIX="com.myhouse.$PROFILE"
 fi
 
-for job in dashboard collector deals permits discover bot; do
+for job in dashboard collector deals permits auctions discover bot; do
   label="${LABEL_PREFIX}.${job}"
   launchctl bootout "gui/$UID_NUM/$label" 2>/dev/null || true
   rm -f "$DEST/$label.plist"
