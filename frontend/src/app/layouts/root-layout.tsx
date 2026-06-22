@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { apiPostForm } from '@/shared/api/client'
 
 const NAV_LINKS: Array<{ to: string; label: string; end?: true }> = [
@@ -119,8 +119,13 @@ export function RootLayout() {
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center gap-3 px-4">
-          {/* 브랜드 */}
-          <span className="shrink-0 text-sm font-semibold">myhouse</span>
+          {/* 브랜드 — 클릭하면 매물(인덱스) 페이지로 */}
+          <Link
+            to="/"
+            className="shrink-0 text-sm font-semibold transition-opacity hover:opacity-70"
+          >
+            myhouse
+          </Link>
 
           {/* 페이지 네비 */}
           <nav className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
