@@ -129,7 +129,7 @@ class Deal(SQLModel, table=True):
 
 
 class LandPermit(SQLModel, table=True):
-    """서울시 토지거래허가 1건 (land.seoul.go.kr 경유) — 추적 단지에 매칭된 것만 저장.
+    """토지거래허가 1건 (서울 land.seoul.go.kr·과천 gccity.go.kr 경유) — 추적 단지에 매칭된 것만 저장.
 
     실거래(Deal)의 *선행* 신호: 거래 완료·신고 전에 뜨는 허가다. 단 응답에 가격·면적이
     없어 '단지에서 허가 N건' 수준의 거래활성 신호로만 쓴다(가격은 실거래로 보완).
@@ -145,9 +145,9 @@ class LandPermit(SQLModel, table=True):
 
     permit_key: str = Field(primary_key=True)
     complex_no: str = Field(foreign_key="complex.complex_no")  # 매칭된 추적 단지
-    sgg_cd: str  # 자치구 코드(11xxx)
+    sgg_cd: str  # 시군구 코드(서울 자치구 11xxx · 과천 41290)
     lawd_cd: str | None = None  # 법정동코드 10자리
-    address: str = ""  # "강남구 청담동 127-31" (표시용)
+    address: str = ""  # "강남구 청담동 127-31" / "과천시 별양동 3" (표시용)
     bonbun: str | None = None  # 본번 4자리 zero-pad
     bubun: str | None = None  # 부번 4자리 zero-pad
     permit_date: str | None = None  # 허가일 ISO 'YYYY-MM-DD'

@@ -620,6 +620,38 @@ def probe_permits(
         typer.echo(f"  {p.permit_date}  {p.address}  [{jb}]  {p.job_gbn}")
 
 
+@app.command(name="probe-permits-gc")
+def probe_permits_gc(
+    config: str = typer.Option("config.yaml", help="설정 파일 경로"),
+    months: int = typer.Option(3, help="최신 월별 글 N개 조회"),
+    limit: int = typer.Option(30, help="출력할 허가 건수"),
+) -> None:
+    """과천시 토지거래허가내역(gccity.go.kr 게시판 HWP)을 직접 조회해 연동을 검증(브라우저 불필요)."""
+    import collections
+
+    from .gyeonggi.client import GwacheonLandClient
+    from .seoul.permit_parser import RESIDENTIAL
+
+    _load(config)
+    typer.echo("🌐 gccity.go.kr 토지거래허가내역 조회 중…")
+    with GwacheonLandClient() as client:
+        posts = client.list_posts()
+        typer.echo(
+            f"게시판 글 {len(posts)}건 · 최신: "
+            + ", ".join(f"{y}.{m}" for _b, y, m in posts[:months])
+        )
+        permits = client.fetch_months(months)
+
+    res = [p for p in permits if p.use_purp == RESIDENTIAL]
+    typer.echo(f"최신 {months}개월: 전체 {len(permits)}건 · 주거용 {len(res)}건")
+    dist = collections.Counter(p.use_purp for p in permits)
+    typer.echo("이용목적: " + ", ".join(f"{k} {v}" for k, v in dist.items()))
+    for p in sorted(res, key=lambda x: x.permit_date or "", reverse=True)[:limit]:
+        jb = f"{p.bonbun}-{p.bubun}" if p.bonbun else "?"
+        cortar = p.lawd_cd or "미매핑"
+        typer.echo(f"  {p.permit_date}  {p.address}  [{jb}·{cortar}]  {p.job_gbn}")
+
+
 @app.command(name="probe-auctions")
 def probe_auctions(
     court: str = typer.Argument(..., help="법원코드(B000210) 또는 이름(서울중앙)"),

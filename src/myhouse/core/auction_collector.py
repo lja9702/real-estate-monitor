@@ -151,11 +151,17 @@ def _apply_auction_ops(
     """diff 연산을 ORM 에 반영. 알림 대상(NEW·PRICE_DOWN·DATE_CHANGED) op 리스트 반환.
 
     resolve 가 있으면 NEW 물건마다 옥션원 직링크를 1회 해석(이후 행에 캐시·재사용).
+
+    auction_key 는 전역 PK 다. 같은 지번에 추적단지가 둘 이상이면(예: 과천 주공8·9단지=부림동 41,
+    재건축 분할 단지) 동일 물건이 양쪽에 매칭된다 — diff 는 단지별로 계산되므로 두 번째 단지는
+    이를 NEW 로 본다. 이때 한 단지에만 귀속하고 형제 단지는 건너뛴다(중복 PK 삽입 회피).
     """
     alerts: list[AuctionOp] = []
     for op in diff.ops:
         dto = op.dto
         if op.kind == NEW:
+            if session.get(Auction, dto.auction_key) is not None:
+                continue  # 같은 지번의 형제 단지에 이미 귀속됨 — 전역 유일키 중복 회피
             view_url = resolve(dto.case_no) if resolve is not None else None
             session.add(_new_auction(dto, complex_no, run_id, now_s, view_url))
             op.view_url = view_url
