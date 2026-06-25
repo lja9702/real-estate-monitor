@@ -74,14 +74,14 @@ def pull_db(
     if client is None:
         return False
     prev_etag = (state or {}).get("etag")
-    result = client.get(settings.r2_bucket, settings.r2_db_key, if_none_match=prev_etag)
-    if result is None:
-        return False  # 304(미변경) 또는 404(아직 업로드 전)
-    body, etag = result
     dest = Path(dest_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    tmp.write_bytes(body)
+    # 스트리밍 다운로드(전체를 메모리에 올리지 않음 — 큰 DB·작은 머신 OOM 방지).
+    etag = client.get_to_file(settings.r2_bucket, settings.r2_db_key, tmp, if_none_match=prev_etag)
+    if etag is None:
+        tmp.unlink(missing_ok=True)  # 304(미변경)·404(미업로드) — 부분 파일 없게
+        return False
     os.replace(tmp, dest)  # 같은 디렉터리 내 원자적 교체
     if state is not None:
         state["etag"] = etag

@@ -37,6 +37,19 @@ class FakeS3:
             return None  # 304 미변경
         return body, etag
 
+    def get_to_file(self, bucket, key, dest_path, if_none_match=None):
+        self.get_calls += 1
+        v = self.store.get((bucket, key))
+        if v is None:
+            return None  # 404
+        body, etag = v
+        if if_none_match and if_none_match == etag:
+            return None  # 304 미변경 — 파일 미생성
+        from pathlib import Path as _P
+
+        _P(dest_path).write_bytes(body)
+        return etag
+
 
 def _make_db(path, rows):
     con = sqlite3.connect(path)

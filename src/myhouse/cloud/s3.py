@@ -137,10 +137,42 @@ class S3Client:
         return r.headers.get("etag")
 
     def get(self, bucket: str, key: str, if_none_match: str | None = None) -> tuple[bytes, str | None] | None:
-        """객체 바이트와 etag. 변경 없음(304)·미존재(404)면 None."""
+        """객체 바이트와 etag. 변경 없음(304)·미존재(404)면 None.
+
+        주의: 전체를 메모리에 올린다. 큰 파일은 get_to_file(스트리밍)을 쓸 것.
+        """
         extra = {"if-none-match": if_none_match} if if_none_match else None
         r = self._request("GET", bucket, key, extra_headers=extra)
         if r.status_code in (304, 404):
             return None
         r.raise_for_status()
         return r.content, r.headers.get("etag")
+
+    def get_to_file(
+        self, bucket: str, key: str, dest_path, if_none_match: str | None = None
+    ) -> str | None:
+        """객체를 dest_path 로 **스트리밍 저장**(전체를 메모리에 올리지 않음) → etag.
+
+        변경 없음(304)·미존재(404)면 None 이고 파일을 만들지 않는다(저메모리 — 클라우드 256MB 안전).
+        """
+        path = f"/{bucket}/{key}"
+        extra = {"if-none-match": if_none_match} if if_none_match else None
+        headers, _ = sign_v4(
+            method="GET",
+            host=self.host,
+            path=path,
+            body=b"",
+            access_key=self.access_key,
+            secret_key=self.secret_key,
+            region=self.region,
+            extra_headers=extra,
+        )
+        url = f"{self.endpoint}{_encode_path(path)}"
+        with httpx.stream("GET", url, headers=headers, timeout=self.timeout) as r:
+            if r.status_code in (304, 404):
+                return None
+            r.raise_for_status()
+            with open(dest_path, "wb") as f:
+                for chunk in r.iter_bytes(chunk_size=1 << 20):  # 1MB 청크
+                    f.write(chunk)
+            return r.headers.get("etag")

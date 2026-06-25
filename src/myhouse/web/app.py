@@ -21,21 +21,13 @@ WEB_DIR = Path(__file__).parent
 logger = logging.getLogger(__name__)
 
 
-def _initial_pull(settings, db_path: str, state: dict) -> None:
-    """기동 시 최신 DB 를 1회 받아둔다(실패해도 기존 파일로 서빙)."""
-    from ..cloud.sync import pull_db, s3_from_settings
-
-    if s3_from_settings(settings) is None:
-        return
-    try:
-        if pull_db(settings, db_path, state=state):
-            logger.info("초기 DB pull 완료 (etag=%s)", state.get("etag"))
-    except Exception:
-        logger.warning("초기 DB pull 실패 — 기존 파일로 서빙", exc_info=True)
-
-
 def _start_sync_refresh(app: FastAPI, settings, db_path: str, state: dict) -> None:
-    """주기적으로 R2 에서 최신 DB 를 받아 교체하고, 갱신 시 엔진을 dispose 해 재연결시킨다."""
+    """백그라운드로 최신 DB 를 받아 교체. 기동 직후 즉시 1회 + 이후 주기적으로.
+
+    create_app(=서버 기동) 을 막지 않으려고 초기 pull 도 이 스레드에서 한다 — 50MB 다운로드가
+    시작을 지연시키지 않아 /healthz 가 곧장 통과하고(재시작 루프 방지), 다운로드는 스트리밍이라
+    메모리 스파이크가 없다. DB 가 도착하면 엔진을 dispose 해 다음 요청이 새 파일로 재연결된다.
+    """
     from ..cloud.sync import s3_from_settings
 
     if s3_from_settings(settings) is None:
@@ -45,14 +37,17 @@ def _start_sync_refresh(app: FastAPI, settings, db_path: str, state: dict) -> No
     def _loop() -> None:
         from ..cloud.sync import pull_db
 
+        first = True
         while True:
-            time.sleep(interval)
+            if not first:
+                time.sleep(interval)
+            first = False
             try:
                 if pull_db(settings, db_path, state=state):
                     app.state.engine.dispose()  # 다음 요청이 새 파일로 재연결
-                    logger.info("DB 갱신 반영 (etag=%s)", state.get("etag"))
+                    logger.info("DB 동기화 반영 (etag=%s)", state.get("etag"))
             except Exception:
-                logger.warning("주기 DB pull 실패", exc_info=True)
+                logger.warning("DB pull 실패", exc_info=True)
 
     threading.Thread(target=_loop, name="myhouse-sync-pull", daemon=True).start()
 
@@ -76,12 +71,9 @@ def create_app(config_path: str | None = None) -> FastAPI:
     settings = Settings(_env_file=config.app.env_file)
     readonly = settings.cloud_readonly
 
-    # 읽기 전용(클라우드): 기동 시 R2 에서 최신 DB 를 1회 받아두고, DB 를 ro 로 연다.
-    # 쓰기인 init_db·좀비정리는 건너뛴다(스키마/마이그레이션은 동기화 원본인 맥이 이미 끝낸 상태).
+    # 읽기 전용(클라우드): DB 를 ro 로 연다. 최신 DB 는 백그라운드 스레드가 받아 교체하므로
+    # 기동을 막지 않는다. 쓰기인 init_db·좀비정리는 건너뛴다(스키마는 동기화 원본 맥이 이미 끝낸 상태).
     sync_state: dict = {}
-    if readonly:
-        _initial_pull(settings, config.app.db_path, sync_state)
-
     engine = make_engine(config.app.db_path, readonly=readonly)
     if not readonly:
         init_db(engine)

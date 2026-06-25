@@ -1,31 +1,35 @@
-# Fly.io — myhouse 읽기 전용 대시보드(클라우드). `fly launch` 가 app 이름을 채운다.
-# 비밀(초대코드·SESSION_SECRET·R2 키)은 fly.toml 이 아니라 `fly secrets set` 으로 주입한다(DEPLOY.md).
-app = "myhouse-dashboard"
-primary_region = "nrt"  # 도쿄(한국 근접). Fly 에 서울 리전은 없음
+# fly.toml app configuration file generated for myhouse-dashboard on 2026-06-26T01:59:50+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'myhouse-dashboard'
+primary_region = 'nrt'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  CLOUD_READONLY = "1"
-  MYHOUSE_CONFIG = "config.yaml"
-  # 동기화 주기(초). 기본 600. 항상 깨어있게 두면 이 주기로 최신 DB 를 받는다.
-  SYNC_PULL_INTERVAL_SECONDS = "600"
+  CLOUD_READONLY = '1'
+  MYHOUSE_CONFIG = 'config.yaml'
+  SYNC_PULL_INTERVAL_SECONDS = '600'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "suspend"   # 유휴 시 정지(비용↓) — 요청 오면 자동 기동
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
-  min_machines_running = 0          # 항상 깨어있게 하려면 1 (월 ~$2, 동기화도 계속)
+  min_machines_running = 0
 
   [[http_service.checks]]
-    method = "GET"
-    path = "/healthz"               # 게이트·DB 무관하게 200 → 첫 push 전에도 헬스 OK
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512
