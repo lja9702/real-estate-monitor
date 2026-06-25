@@ -30,7 +30,9 @@ from .diff import (
     PRICE_CHANGED,
     REAPPEARED,
     REMOVED,
+    REREGISTERED,
     SEEN,
+    SUPERSEDED,
     ComplexDiff,
     DiffOp,
     ListingState,
@@ -185,6 +187,7 @@ def _to_state(listing: Listing) -> ListingState:
         price_deal=listing.price_deal,
         price_rent=listing.price_rent,
         missing_since=from_iso(listing.missing_since),
+        realtor_name=listing.realtor_name,
     )
 
 
@@ -254,6 +257,17 @@ def _apply_ops(
             listing = _new_listing(op.dto, run_id, now_s)
             session.add(listing)
             session.add(_history(op, EventType.NEW, run_id, now_s, listing))
+        elif op.kind == REREGISTERED and op.dto is not None:
+            # 같은 물건 재등록(확인갱신→새 번호). NEW 처럼 적재해 추적은 하되 알림은 무음.
+            listing = _new_listing(op.dto, run_id, now_s)
+            session.add(listing)
+            session.add(_history(op, EventType.REREGISTERED, run_id, now_s, listing))
+        elif op.kind == SUPERSEDED:
+            # 재등록으로 대체된 옛 번호 — REMOVED 와 동일하게 정리하되 거래완료로 알리지 않는다.
+            listing = by_id[op.article_no]
+            listing.status = ListingStatus.REMOVED
+            session.add(listing)
+            session.add(_history(op, EventType.SUPERSEDED, run_id, now_s, listing))
         elif op.kind == PRICE_CHANGED and op.dto is not None:
             listing = by_id[op.article_no]
             _apply_content(listing, op.dto)
@@ -362,8 +376,11 @@ def _collect_one(
     repo.add_flash_deals(session, flash_signals, run_id=run_id, now=to_iso(now))
     session.commit()
 
+    reg = len(cdiff.reregistered)
+    sup = len(cdiff.superseded)
+    churn = f" · 재등록흡수 {reg}/{sup}" if (reg or sup) else ""
     log.info(
-        "단지 %s(%s): 수집 %d건 · 신규 %d · 가격변동 %d · 거래완료 %d · 급매 %d%s",
+        "단지 %s(%s): 수집 %d건 · 신규 %d · 가격변동 %d · 거래완료 %d · 급매 %d%s%s",
         cx.complex_no,
         label,
         len(fetch.articles),
@@ -371,6 +388,7 @@ def _collect_one(
         len(cdiff.price_changed),
         len(cdiff.removed),
         len(flash_signals),
+        churn,
         "" if fetch.complete else " · ⚠수집불완전(삭제판정 생략)",
     )
     return ComplexResult(

@@ -218,6 +218,28 @@ def get_auctions_for_complex(session: Session, complex_no: str) -> list[Auction]
     return list(session.exec(select(Auction).where(Auction.complex_no == complex_no)))
 
 
+def get_auctions_to_reconcile(
+    session: Session, today_iso: str, *, limit: int | None = None
+) -> list[Auction]:
+    """결과 미확정(outcome IS NULL)이면서 매각기일이 지난(sale_date<오늘) 물건 — 사후 정합 대상.
+
+    forward 검색에서 사라진 종결/유찰 물건을 사건 기일내역으로 확정하기 위한 폴링 목록.
+    오래된 것부터(매각기일 오름차순). limit 으로 회차당 폴링량을 제한(차단 회피).
+    """
+    stmt = (
+        select(Auction)
+        .where(
+            Auction.outcome == None,  # noqa: E711
+            Auction.sale_date != None,  # noqa: E711
+            Auction.sale_date < today_iso,
+        )
+        .order_by(Auction.sale_date)
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(session.exec(stmt))
+
+
 def purge_old_auctions(session: Session, cutoff_date: str) -> int:
     """매각기일(sale_date)이 cutoff_date(YYYY-MM-DD) 이전인 지난 경매를 삭제. 삭제 건수 반환.
 

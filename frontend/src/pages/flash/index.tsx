@@ -234,22 +234,32 @@ export function FlashPage() {
             <TableBody>
               {data.rows.map((r) => {
                 const gone = r.status !== 'ACTIVE'
-                const name = (
-                  <Link to={`/complex/${r.complex_no}`} className="font-medium hover:underline">
-                    {r.complex_name}
-                  </Link>
-                )
                 return (
                   <TableRow key={r.article_no} className={gone ? 'opacity-50' : ''}>
                     <TableCell className="whitespace-nowrap tabular-nums text-sm">
                       {r.detected_at.slice(0, 10).replace(/-/g, '.')}
                     </TableCell>
                     <TableCell>
-                      {r.article_url ? (
-                        <a href={r.article_url} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                      <span className="font-medium">
+                        <Link to={`/complex/${r.complex_no}`} className="hover:underline">
                           {r.complex_name}
-                        </a>
-                      ) : name}
+                        </Link>
+                        {r.article_url && (
+                          <a
+                            href={r.article_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-1.5 text-xs font-normal text-muted-foreground hover:text-foreground hover:underline"
+                          >
+                            네이버↗
+                          </a>
+                        )}
+                      </span>
+                      {r.dup_count > 1 && (
+                        <Badge variant="outline" className="ml-1.5 h-4 px-1 text-[10px]">
+                          외 {r.dup_count - 1}건
+                        </Badge>
+                      )}
                       {r.is_new && (
                         <Badge variant="default" className="ml-1.5 h-4 px-1 text-[10px]">신규감지</Badge>
                       )}

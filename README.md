@@ -2,24 +2,20 @@
 
 관심 아파트 단지의 매물을 **매일 자동 수집**해서 직전 스냅샷과 비교(diff)하고,
 **신규 / 가격변동 / 거래완료(추정)** 변화를 **텔레그램으로 요약 알림** + **로컬 웹 대시보드**에서
-필터·정렬·별표·메모하며 매수 후보를 추려나가는 개인용 도구입니다. 매물(호가)뿐 아니라
-**국토부 실거래가 · 토지거래허가 · 법원경매 · 급매**까지 한곳에서 모니터링합니다.
+필터·정렬·별표·메모하며 매수 후보를 추려나가는 개인용 도구입니다.
 
-- **언어/실행**: Python 3.12 + **React SPA**(Vite) 대시보드 · 맥북 로컬(한국 IP) · `launchd` 로 매일 예약
+- **스택**: Python 3.12 + **React SPA**(Vite) 대시보드 · 단일 SQLite(`data/myhouse.db`) ·
+  맥북 로컬(한국 IP)에서 `launchd` 로 매일 예약 실행
 - **데이터**: `new.land.naver.com` 비공식 API. 토큰이 3시간마다 만료되고 봇/rate 차단이 강해,
-  **헤드리스 브라우저(Playwright)** 가 실행마다 토큰을 자동 발급하고 브라우저 컨텍스트로 호출해 우회합니다.
-- **저장**: 단일 SQLite 파일 (`data/myhouse.db`)
-- **실거래가(국토부)**: 매물(호가)과 별개로 **국토부 실거래가**(네이버 `prices/real` 경유)를 **하루 1회**
-  수집해 **신규 실거래/거래취소**를 텔레그램으로 알리고 `/deals` 화면에서 단지·평형·기간별로 봅니다. → [11. 실거래가](#11-실거래가-국토부)
-- **토지거래허가·법원경매·급매**: 추적 단지의 **토지거래허가**(서울 25구 `land.seoul.go.kr` + 경기 과천 `gyeonggi/`),
-  **법원경매**(`courtauction.go.kr`), **급매**(같은 평형 호가 하한을 일정% 이상 밑도는 매물)를 각각 수집·알림하고
-  `/permits`·`/auctions`·`/flash` 화면에서 봅니다. → [13. 토지거래허가·법원경매·급매](#13-토지거래허가--법원경매--급매)
-- **텔레그램 양방향 봇**: 정기 알림에 더해, 텔레그램에서 **`/add`(신규단지 추가 — 번호 또는 단지명·주소 검색) ·
-  `/check`(매물 즉시 갱신+변동) · `/deals`(실거래 확인)** 명령으로 원할 때 바로 조회합니다. → [12. 텔레그램 봇](#12-텔레그램-봇--양방향-명령)
+  **헤드리스 브라우저(Playwright)** 가 실행마다 토큰을 자동 발급하고 브라우저 컨텍스트로 호출해 우회합니다. → [8. 동작 원리](#8-동작-원리-정확성-포인트)
+- **다섯 갈래 모니터링** — 각각 별도 테이블·수집기·화면·알림으로 분리:
+  매물(호가, [5. 사용법](#5-사용법)) · **실거래가**(국토부, [11](#11-실거래가-국토부)) ·
+  **토지거래허가 · 법원경매 · 급매**([13](#13-토지거래허가--법원경매--급매)).
+- **텔레그램 양방향 봇**: 정기 push 알림에 더해 `/add`·`/check`·`/deals` 등으로 원할 때 바로 조회. → [12. 텔레그램 봇](#12-텔레그램-봇--양방향-명령)
 
 > ⚠️ **비공식 API 주의**: 네이버는 공식 부동산 API 가 없어 비공식 엔드포인트를 사용합니다. 형태가
-> 바뀔 수 있으니 **최초 1회 `probe` 로 실제 응답을 검증**하세요(아래 [API 검증](#5-api-검증-중요)).
-> 소규모(단지 몇 개 × 1일 2회 × 한국 IP)라 차단 위험은 낮지만, 과도한 호출은 피하세요.
+> 바뀔 수 있으니 **최초 1회 `probe` 로 실제 응답을 검증**하세요([6. API 검증](#6-api-검증-중요)).
+> 소규모(단지 몇 개·한국 IP)라 차단 위험은 낮지만, 과도한 호출은 피하세요.
 
 ---
 
@@ -42,8 +38,8 @@ python3.12 -m venv .venv
 
 `myhouse` 콘솔 스크립트도 설치됩니다: `.venv/bin/myhouse --help` (또는 `python -m myhouse.cli`).
 
-> 대시보드는 **React SPA**(`frontend/`, Vite+React+TS)이고 `dist/` 는 `.gitignore` 대상이라 **배포 시 빌드**합니다.
-> `scripts/install_launchd.sh` 가 설치 단계에서 `npm ci && npm run build` 를 자동 실행합니다.
+> 대시보드 산출물 `dist/` 는 `.gitignore` 대상이라 **배포 시 빌드**합니다.
+> `scripts/install_launchd.sh` 가 설치 단계에서 `npm ci && npm run build` 를 자동 실행합니다([7. 자동화](#7-자동화-macos-launchd)).
 
 ## 2. 텔레그램 봇 설정
 
@@ -64,7 +60,8 @@ python3.12 -m venv .venv
    ```
 5. 연결 테스트: `.venv/bin/python -m myhouse.cli test-notify`
 
-> 텔레그램을 설정하지 않아도 동작합니다(알림 없이 수집·대시보드만).
+> 텔레그램을 설정하지 않아도 동작합니다(알림 없이 수집·대시보드만). 접근 제어(운영자 앵커 + 초대코드)의
+> 동작 방식은 [12. 텔레그램 봇](#12-텔레그램-봇--양방향-명령) 참고.
 
 ## 3. 추적 대상 설정 — `config.yaml`
 
@@ -153,9 +150,8 @@ data = json.load(open("data/discovered_accurate.json"))
 - **신규 판정**: 첫 회차는 **baseline**(현재 편입 단지를 전부 기록만, 무알림). 이후 회차부터 baseline·
   추적 단지(config/DB)에 **없던** 단지만 알립니다. 알림은 단지당 1회(`discover_candidate.notified`).
 - **설정**: `config.yaml` 의 `discover:` 섹션(가격/세대수/면적·`regions[].bbox`). 기본 8개 구가 들어 있습니다.
-- **검증**: `python -m myhouse.cli probe-markers [--region 강남구]` 로 지역별 편입 단지 수를 즉석 확인.
-- **수동 실행/봇**: `python -m myhouse.cli discover --trigger manual`, 또는 텔레그램 `/discover`.
-- **일정**: launchd `com.myhouse.discover`(매주 월요일 09:00 KST). 시각/요일은 plist 의 `StartCalendarInterval` 수정.
+- **검증/실행**: `probe-markers [--region 강남구]`(지역별 편입 단지 수 즉석 확인) ·
+  `discover --trigger manual`(또는 텔레그램 `/discover`). 일정은 [7. 자동화](#7-자동화-macos-launchd) 참고.
 
 ## 5. 사용법
 
@@ -185,27 +181,39 @@ data = json.load(open("data/discovered_accurate.json"))
 
 ## 6. API 검증 (중요)
 
-`probe` 는 헤드리스 브라우저로 토큰을 발급받아 실제 단지 매물을 수집해 봅니다.
+`probe` 류 명령은 헤드리스 브라우저로 토큰을 발급받아 각 데이터원을 실제로 한 번 수집해 봅니다.
 
 ```bash
-.venv/bin/python -m myhouse.cli probe 947          # 디버그로 브라우저 보기: --no-headless
+.venv/bin/python -m myhouse.cli probe 947          # 매물 — 디버그로 브라우저 보기: --no-headless
 ```
 - `수집 N건 (파싱성공 N …) · 완료=True` 와 매물 DTO 가 정상으로 보이면 그대로 `collect` 하면 됩니다.
-- 형태가 바뀌면 `src/myhouse/naver/endpoints.py`(요청 URL)·`parser.py`(응답 필드)·`browser.py`(토큰 캡처)
-  만 조정하면 됩니다. 네이버 의존 지식은 전부 `naver/` 에 격리돼 있습니다.
+- 데이터원별 probe: 실거래 `probe-deals` · 토지거래허가 `probe-permits`(서울)·`probe-permits-gc`(과천) ·
+  법원경매 `probe-auctions` · 신규탐색 `probe-markers` · 검색 `probe-search`.
+
+> **응답 형태가 바뀌면** 네이버 의존 지식은 전부 `naver/` 에 격리돼 있어 그곳만 고치면 됩니다 —
+> `endpoints.py`(요청 URL)·`parser.py`/`deal_parser.py`(응답 필드)·`browser.py`(토큰 캡처).
+> 토지거래허가·법원경매는 각각 `seoul/`·`gyeonggi/`·`court/` 에 격리돼 있습니다([9. 개발](#9-개발)).
 
 ## 7. 자동화 (macOS launchd)
 
 ```bash
 scripts/install_launchd.sh            # 포트 변경: scripts/install_launchd.sh 9000
 ```
-- **대시보드**: 상시 구동(`KeepAlive`) → http://localhost:8765 — 설치 시 `frontend` 를 자동 빌드(`npm ci && npm run build`)
-- **수집기(매일, KST)**: 매물 `collector` **08:10** · 실거래 `deals` **09:30** · 토지거래허가 `permits` **11:00** ·
-  법원경매 `auctions` **11:30** — 시간 변경은 각 `scripts/launchd/com.myhouse.*.plist` 의 `StartCalendarInterval` 수정 후 재설치
-- **신규편입 탐색**: 매주 월요일 **09:00** (`com.myhouse.discover`)
-- **텔레그램 봇**: 상시 구동(`KeepAlive`, 롱폴링) — `com.myhouse.bot`. 로그: `tail -f logs/bot.err`. → [12. 텔레그램 봇](#12-텔레그램-봇--양방향-명령)
-- 상태: `launchctl list | grep myhouse` · 수동 트리거: `launchctl kickstart gui/$(id -u)/com.myhouse.collector`
-- 해제: `scripts/uninstall_launchd.sh`
+설치 시 `frontend` 를 자동 빌드(`npm ci && npm run build`)하고, 아래 작업을 등록합니다(시각은 KST 기본값):
+
+| 작업 | launchd 라벨 | 일정 |
+|---|---|---|
+| 매물 수집 | `com.myhouse.collector` | 매일 11:00 |
+| 실거래 수집 | `com.myhouse.deals` | 매일 11:15 |
+| 토지거래허가 | `com.myhouse.permits` | 매일 11:30 |
+| 법원경매 | `com.myhouse.auctions` | 매일 11:45 |
+| 신규편입 탐색 | `com.myhouse.discover` | 매주 월 09:00 |
+| 대시보드 | `com.myhouse.dashboard` | 상시(`KeepAlive`) → http://localhost:8765 |
+| 텔레그램 봇 | `com.myhouse.bot` | 상시(`KeepAlive`, 롱폴링) |
+
+- **시간 변경**: 각 `scripts/launchd/com.myhouse.*.plist` 의 `StartCalendarInterval`(탐색은 `Weekday`) 수정 후 재설치.
+- **상태/제어**: `launchctl list | grep myhouse` · 수동 트리거 `launchctl kickstart gui/$(id -u)/com.myhouse.collector` ·
+  봇 로그 `tail -f logs/bot.err` · 해제 `scripts/uninstall_launchd.sh`.
 
 > **절전 주의**: 예약 시각에 맥이 꺼져/잠들어 있으면 누락분을 큐잉하지 않고 **깨어날 때 1회만** 실행됩니다.
 > 디바운스를 경과 '시간' 기준으로 설계해 지연 실행에도 안전합니다. 정시 기상을 원하면(관리자 권한):
@@ -220,7 +228,8 @@ scripts/install_launchd.sh            # 포트 변경: scripts/install_launchd.s
 - **다중 중개사 dedup**: 같은 유닛(평형·층·향·거래유형)을 여러 중개사가 다른 가격으로 올리면
   **cluster_key**(가격 제외, 평형 `areaName` 기준)로 묶어 "중개 N곳, 최저~최고가" 로 표시·알림합니다. 제외/메모는 cluster_key 기준, **관심(별표)은 단지(complex) 기준**입니다.
 - **토큰/차단 우회**: new.land 토큰은 3시간마다 만료되고 봇/rate 차단이 강해, 실행마다 **헤드리스 브라우저
-  (Playwright)** 가 토큰을 자동 발급하고 같은 브라우저 컨텍스트로 API 를 호출(`naver/browser.py`).
+  (Playwright)** 가 토큰을 자동 발급하고 같은 브라우저 컨텍스트로 API 를 호출합니다(`naver/browser.py`).
+  토큰은 실행마다 새로 발급되므로 `.env` 에 네이버 토큰을 넣을 필요는 없습니다(텔레그램 토큰만).
 - **단지 주소 자동 조회**: 단지를 처음 수집할 때 `/api/articles/{articleNo}` 상세 응답의 `exposureAddress`
   (예: "서울시 동작구 상도동")를 `complex.address` 에 저장합니다. 이후 수집에서는 DB 캐시를 사용하며,
   텔레그램 알림 헤더에 단지명 옆에 이탤릭으로 표시됩니다.
@@ -246,8 +255,7 @@ scripts/install_launchd.sh            # 포트 변경: scripts/install_launchd.s
 
 - 비공식 API 사용은 네이버 ToS 와 충돌할 수 있습니다. **개인적·소규모**로만 사용하고 과도한 호출을 피하세요.
 - **해외 IP는 차단** 경향이 있어 한국에서 실행하세요(프록시 불필요).
-- 토큰은 실행마다 새로 발급되므로 `.env` 에 네이버 토큰을 넣을 필요는 없습니다(텔레그램 토큰만).
-- new.land 가 토큰 발급 방식/응답 구조를 바꾸면 `naver/browser.py`·`parser.py` 수리가 필요할 수 있습니다.
+- new.land 가 토큰 발급 방식/응답 구조를 바꾸면 `naver/` 수리가 필요할 수 있습니다([6. API 검증](#6-api-검증-중요)).
 
 ## 11. 실거래가 (국토부)
 
@@ -281,17 +289,12 @@ deals:
 # 수동 1회 수집(+텔레그램 다이제스트 미리보기)
 .venv/bin/python -m myhouse.cli collect-deals --trigger manual
 
-# 화면: 대시보드 상단 '실거래가' 탭 → http://localhost:8765/deals
-#   필터(단지·구/동·기간·면적·취소포함)·정렬(거래일/가격), 단지 상세에도 실거래 섹션 표시
+# 화면: 대시보드 '실거래가' 탭 → http://localhost:8765/deals (단지·구/동·기간·면적·취소포함 필터, 거래일/가격 정렬)
 ```
-
-### 자동화
-`scripts/install_launchd.sh` 가 매물 수집기(08:10)에 더해 **실거래 수집기를 매일 09:30 (KST)** 로 등록합니다
-(`com.myhouse.deals`). 수동 트리거: `launchctl kickstart gui/$(id -u)/com.myhouse.deals`.
+일정은 [7. 자동화](#7-자동화-macos-launchd) 참고(`com.myhouse.deals`).
 
 > ⚠️ **호출량**: 전체 추적 단지(`scope: all`)를 평형별로 조회하므로 매물 수집과 비슷한 규모의 호출이 하루 1회
-> 추가됩니다. 차단이 우려되면 `scope: starred`(별표 단지만) 로 좁히세요. 실거래 API 가 막히거나 구조가 바뀌면
-> `naver/endpoints.py`(URL)·`deal_parser.py`(응답 필드)만 수리하면 됩니다.
+> 추가됩니다. 차단이 우려되면 `scope: starred`(별표 단지만) 로 좁히세요.
 
 ## 12. 텔레그램 봇 — 양방향 명령
 
@@ -328,31 +331,28 @@ deals:
 ```bash
 # 수동 실행(포그라운드) — Ctrl-C 로 종료
 .venv/bin/python -m myhouse.cli bot
-
-# 상시 구동: scripts/install_launchd.sh 가 com.myhouse.bot (KeepAlive) 로 등록합니다.
-launchctl kickstart -k gui/$(id -u)/com.myhouse.bot   # 재기동
-tail -f logs/bot.err                                   # 로그
 ```
+상시 구동은 `com.myhouse.bot`(KeepAlive)로 등록됩니다 — 재기동·로그 등은 [7. 자동화](#7-자동화-macos-launchd) 참고.
 
 > 구조: `bot/`(롱폴링 `runner` + 명령 파싱·디스패치 `commands`) · `core/on_demand.py`(단건 추가/매물/실거래/주소검색
 > 오케스트레이션, 정기 수집기의 `run_*_for` 재사용) · `notify/reply.py`(응답 포매팅) · `notify/telegram.py`(전송 +
-> `getUpdates` 롱폴링) · `naver/search_parser.py`(검색 응답 파싱, `/api/search`). 추적 단지는 `core/targets.py` 가 정기 수집에 병합합니다.
+> `getUpdates` 롱폴링) · `naver/search_parser.py`(검색 응답 파싱). 추적 단지는 `core/targets.py` 가 정기 수집에 병합합니다.
 
 ## 13. 토지거래허가 · 법원경매 · 급매
 
-매물(호가)·실거래가에 더해, **추적 단지**를 세 갈래로 더 모니터링합니다. 모두 별도 테이블·수집기·다이제스트로
-분리돼 있고, 대시보드 `/permits`·`/auctions`·`/flash` 와 텔레그램 알림으로 봅니다.
+매물(호가)·실거래가에 더해 **추적 단지**를 세 갈래로 더 모니터링합니다. 모두 별도 테이블·수집기·다이제스트로
+분리돼 있고, 대시보드 `/permits`·`/auctions`·`/flash` 와 텔레그램 알림으로 봅니다. 일정은 [7. 자동화](#7-자동화-macos-launchd) 참고.
 
 ### 토지거래허가 (`/permits`)
 거래허가구역에서 허가가 나면 곧 실거래로 이어지는 **선행신호**입니다. 추적 단지가 속한 구역의 허가 공고를 수집합니다.
 - **데이터원**: 서울 25개구 `land.seoul.go.kr`(`seoul/`), 경기 과천 게시판 HWP(`gyeonggi/`).
-- **설정**: `config.yaml` 의 `permits:` 섹션. **검증/수집**: `probe-permits`(서울)·`probe-permits-gc`(과천),
-  `collect-permits --trigger manual`. **일정**: `com.myhouse.permits` 매일 11:00.
+- **설정/실행**: `config.yaml` 의 `permits:` 섹션 · 검증 `probe-permits`(서울)·`probe-permits-gc`(과천) ·
+  수집 `collect-permits --trigger manual`(`com.myhouse.permits`).
 
 ### 법원경매 (`/auctions`)
 추적 단지의 **법원경매**(`courtauction.go.kr`) 물건을 순수 httpx 로 수집해 신규/감정가/최저가/매각기일/유찰횟수를 봅니다.
 같은 지번에 형제 단지가 둘 이상이면(예: 과천 주공8·9) 동일 물건을 한쪽에만 귀속해 전역 PK 중복을 피합니다.
-- **검증/수집**: `probe-auctions`, `collect-auctions --trigger manual`. **일정**: `com.myhouse.auctions` 매일 11:30.
+- **검증/실행**: `probe-auctions` · `collect-auctions --trigger manual`(`com.myhouse.auctions`).
 
 ### 급매 (`/flash`)
 같은 단지·평형의 **호가 하한을 일정 % 이상 밑도는** 매물을 수집 시점에 '급매'로 탐지합니다(신규 진입 + 가격 인하 두 트리거).

@@ -4,7 +4,7 @@
 # 사용: scripts/install_launchd.sh [PROFILE [CONFIG [PORT]]]
 #
 #   PROFILE  식별자 (기본: main)
-#            "main" → com.myhouse.*        logs/         08:10/09:30/11:00/월09:00
+#            "main" → com.myhouse.*        logs/         11:00/11:15/11:30/11:45/월09:00
 #            기타   → com.myhouse.PROFILE.*  logs/PROFILE/ 08:40/10:00/11:30/월09:30
 #   CONFIG   설정 파일 경로 (기본: config.yaml)
 #   PORT     대시보드 포트 (기본: 8765)
@@ -51,10 +51,10 @@ fi
 if [[ "$PROFILE" == "main" ]]; then
   LABEL_PREFIX="com.myhouse"
   LOG_DIR="$PROJECT/logs"
-  COLLECTOR_HOUR=8;  COLLECTOR_MINUTE=10
-  DEALS_HOUR=9;      DEALS_MINUTE=30
-  PERMITS_HOUR=11;   PERMITS_MINUTE=0
-  AUCTIONS_HOUR=11;  AUCTIONS_MINUTE=30
+  COLLECTOR_HOUR=11; COLLECTOR_MINUTE=0
+  DEALS_HOUR=11;     DEALS_MINUTE=15
+  PERMITS_HOUR=11;   PERMITS_MINUTE=30
+  AUCTIONS_HOUR=11;  AUCTIONS_MINUTE=45
   DISCOVER_HOUR=9;   DISCOVER_MINUTE=0
 else
   LABEL_PREFIX="com.myhouse.$PROFILE"

@@ -15,11 +15,14 @@ import time
 import httpx
 
 from .auction_parser import AuctionDTO, parse_auctions
+from .case_dxdy_parser import AuctionDateEvent, parse_case_dxdy
 from .endpoints import (
     COURT_AUCTION_BASE,
     SEARCH_SUBMISSION_ID,
     USER_AGENT,
+    build_case_dxdy_body,
     build_search_body,
+    case_dxdy_url,
     courts_url,
     search_referer,
     search_url,
@@ -106,7 +109,14 @@ class CourtAuctionClient:
         self._send("GET", warmup_url(), headers={"Accept": "text/html,*/*"})
         self._warmed = True
 
-    def _post_json(self, url: str, body: dict, *, submission_id: str | None = None) -> dict:
+    def _post_json(
+        self,
+        url: str,
+        body: dict,
+        *,
+        submission_id: str | None = None,
+        sc_userid: bool = False,
+    ) -> dict:
         headers = {
             "Content-Type": "application/json; charset=UTF-8",
             "Accept": "application/json, text/javascript, */*; q=0.01",
@@ -116,6 +126,7 @@ class CourtAuctionClient:
         }
         if submission_id:
             headers["submissionid"] = submission_id
+        if submission_id or sc_userid:
             headers["sc-userid"] = "SYSTEM"
         resp = self._send(
             "POST", url, content=json.dumps(body).encode("utf-8"), headers=headers
@@ -181,6 +192,16 @@ class CourtAuctionClient:
             page += 1
             self._sleep()
         return out
+
+    def fetch_case_dxdy(self, court_code: str, cs_no: str) -> list[AuctionDateEvent]:
+        """사건 1건의 기일내역(매각/유찰/미납 결과·낙찰가·다음기일). 매각기일 지난 물건 정합용.
+
+        cs_no 는 내부 csNo(case_no_to_csno). 빈 응답(사건 없음)은 빈 리스트.
+        """
+        self._sleep()  # 정합은 사건별 1콜 — throttle
+        self._warmup()
+        payload = self._post_json(case_dxdy_url(), build_case_dxdy_body(court_code, cs_no), sc_userid=True)
+        return parse_case_dxdy(payload)
 
 
 def _clean_str(value: object) -> str | None:

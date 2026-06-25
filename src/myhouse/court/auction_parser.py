@@ -48,10 +48,45 @@ class AuctionDTO(BaseModel):
     in_progress: bool = True  # mulJinYn == "Y"
     area_min: float | None = None  # 전용 추정 ㎡(minArea)
     area_max: float | None = None
+    remarks: str | None = None  # 물건비고(mulBigo) — 지분매각·위반건축물·대지권 등 권리/하자
 
     @property
     def is_apartment(self) -> bool:
         return self.usage_name == APARTMENT_USAGE_NAME or self.scls_util_cd == APARTMENT_SCLS_CD
+
+    @property
+    def flags(self) -> list[str]:
+        """물건비고에서 추출한 핵심 위험/특이 플래그(짧은 라벨)."""
+        return extract_flags(self.remarks)
+
+
+# 물건비고 텍스트 → 짧은 위험/특이 플래그. 매수인이 가장 주의해야 할 항목 위주(부분일치).
+# (검색 키워드, 표시 라벨) — 앞쪽이 더 구체적이도록 정렬.
+_FLAG_RULES: list[tuple[tuple[str, ...], str]] = [
+    (("지분",), "지분매각"),
+    (("위반건축물",), "위반건축물"),
+    (("대지권 없", "대지권없", "대지지분 없", "대지지분없", "건물만 매각", "건물만매각"), "대지권미포함"),
+    (("유치권",), "유치권"),
+    (("법정지상권", "분묘기지권"), "법정지상권"),
+    (("선순위",), "선순위"),
+    (("임차권등기",), "임차권등기"),
+    (("별도등기",), "별도등기"),
+    (("재매각",), "재매각"),
+    (("농지취득", "농취"), "농취증"),
+    (("토지거래", "허가구역"), "토지거래허가"),
+    (("맹지",), "맹지"),
+]
+
+
+def extract_flags(remarks: str | None) -> list[str]:
+    """물건비고에서 위험/특이 플래그 라벨 리스트(중복 제거·순서 유지). 없으면 빈 리스트."""
+    if not remarks:
+        return []
+    out: list[str] = []
+    for keys, label in _FLAG_RULES:
+        if any(k in remarks for k in keys) and label not in out:
+            out.append(label)
+    return out
 
 
 def _clean(value: object) -> str | None:
@@ -171,6 +206,7 @@ def parse_auction_row(row: dict) -> AuctionDTO | None:
         in_progress=_clean(row.get("mulJinYn")) == "Y",
         area_min=_float(row.get("minArea")),
         area_max=_float(row.get("maxArea")),
+        remarks=_clean(row.get("mulBigo")),
     )
 
 

@@ -19,6 +19,13 @@ NEW = "new"
 PRICE_DOWN = "price_down"
 DATE_CHANGED = "date_changed"
 SEEN = "seen"
+# 사후 정합(사건 기일내역) 결과 op — forward 검색에서 사라진 매각기일 지난 물건.
+SOLD = "sold"  # 매각(낙찰)
+FAILED = "failed"  # 유찰 또는 대금미납 재매각(재공고 시 다음기일 동봉)
+WITHDRAWN = "withdrawn"  # 취하·취소·기각 등 종국
+
+# 정합으로 확정된 결과(알림 대상) op kind 집합.
+OUTCOME_KINDS = (SOLD, FAILED, WITHDRAWN)
 
 
 @dataclass
@@ -28,6 +35,9 @@ class AuctionOp:
     old_min_bid_manwon: int | None = None  # PRICE_DOWN: 직전 최저가
     old_sale_date: str | None = None  # PRICE_DOWN/DATE_CHANGED: 직전 매각기일
     view_url: str | None = None  # 옥션원 물건 직링크(해석됐을 때) — 알림 링크용
+    outcome_label: str | None = None  # SOLD/FAILED/WITHDRAWN: 사람용 라벨
+    final_bid_manwon: int | None = None  # SOLD: 낙찰가(만원)
+    next_sale_date: str | None = None  # FAILED: 재공고된 다음 매각기일
 
 
 @dataclass
