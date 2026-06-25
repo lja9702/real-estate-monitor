@@ -18,22 +18,37 @@ from .models import (  # noqa: F401 — table 클래스 등록(create_all 이 �
 )
 
 
-def make_engine(db_path: str | Path, echo: bool = False) -> Engine:
-    """db_path 에 대한 SQLite 엔진 생성 (디렉터리 자동 생성, WAL PRAGMA 설정)."""
+def make_engine(db_path: str | Path, echo: bool = False, *, readonly: bool = False) -> Engine:
+    """db_path 에 대한 SQLite 엔진 생성.
+
+    readonly=True(클라우드 읽기 전용): 파일을 `mode=ro` URI 로 열고 `query_only` 만 건다.
+    WAL/foreign_keys PRAGMA 는 쓰기라서 ro 파일에서 실패하므로 적용하지 않으며 -wal/-shm 도 만들지 않는다.
+    """
     p = Path(db_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(
-        f"sqlite:///{p}",
-        echo=echo,
-        connect_args={"check_same_thread": False},
-    )
+    if readonly:
+        engine = create_engine(
+            f"sqlite:///file:{p}?mode=ro&uri=true",
+            echo=echo,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        engine = create_engine(
+            f"sqlite:///{p}",
+            echo=echo,
+            connect_args={"check_same_thread": False},
+        )
 
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_conn, _record):  # noqa: ANN001
         cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.execute("PRAGMA busy_timeout=5000")
-        cur.execute("PRAGMA foreign_keys=ON")
+        if readonly:
+            cur.execute("PRAGMA query_only=ON")
+            cur.execute("PRAGMA busy_timeout=5000")
+        else:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 
     return engine
@@ -56,6 +71,13 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
     ("subscriber", "price_min_manwon", "INTEGER"),
     ("subscriber", "price_max_manwon", "INTEGER"),
     ("subscriber", "approved", "BOOLEAN DEFAULT 0"),
+    ("auction", "outcome", "VARCHAR"),
+    ("auction", "outcome_label", "VARCHAR"),
+    ("auction", "final_bid_manwon", "INTEGER"),
+    ("auction", "outcome_date", "VARCHAR"),
+    ("auction", "next_sale_date", "VARCHAR"),
+    ("auction", "reconciled_at", "VARCHAR"),
+    ("auction", "remarks", "VARCHAR"),
 ]
 
 

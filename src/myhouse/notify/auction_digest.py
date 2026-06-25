@@ -9,10 +9,21 @@ from __future__ import annotations
 from html import escape
 
 from ..core.auction_collector import AuctionRunResult, ComplexAuctionResult
-from ..core.auction_diff import DATE_CHANGED, NEW, PRICE_DOWN, AuctionOp
+from ..core.auction_diff import (
+    DATE_CHANGED,
+    FAILED,
+    NEW,
+    PRICE_DOWN,
+    SOLD,
+    WITHDRAWN,
+    AuctionOp,
+)
 from ..court.auction1_link import court_case_search_url
 
-_TAG = {NEW: "🆕", PRICE_DOWN: "🔻", DATE_CHANGED: "📅"}
+_TAG = {
+    NEW: "🆕", PRICE_DOWN: "🔻", DATE_CHANGED: "📅",
+    SOLD: "🔨", FAILED: "🔁", WITHDRAWN: "🚫",
+}
 
 
 def _d(iso: str | None) -> str:
@@ -35,7 +46,33 @@ def _fail_label(n: int) -> str:
     return "신건" if n <= 0 else f"{n}회유찰"
 
 
+def _outcome_line(op: AuctionOp) -> str:
+    """정합 결과(매각/유찰/취하) op 한 줄."""
+    dto = op.dto
+    bits: list[str] = [f"<code>{escape(dto.case_no)}</code>"]
+    area = dto.area_max or dto.area_min
+    if area:
+        bits.append(f"전용{int(area)}㎡")
+    if op.kind == SOLD:
+        bits.append(f"낙찰 {_money(op.final_bid_manwon)}")
+        if op.final_bid_manwon and dto.appraisal_manwon:
+            bits.append(f"감정 {_money(dto.appraisal_manwon)}({round(op.final_bid_manwon / dto.appraisal_manwon * 100)}%)")
+    elif op.kind == FAILED:
+        label = op.outcome_label or "유찰"
+        if op.next_sale_date:
+            bits.append(f"{label} → 다음 매각 {_d(op.next_sale_date)}")
+            bits.append(f"최저 {_money(op.old_min_bid_manwon)}→{_money(dto.min_bid_manwon)}({dto.min_bid_ratio}%)")
+        else:
+            bits.append(label)
+        bits.append(_fail_label(dto.fail_count))
+    else:  # WITHDRAWN
+        bits.append(op.outcome_label or "취하")
+    return f"{_TAG.get(op.kind, '•')} " + " · ".join(bits)
+
+
 def _op_line(op: AuctionOp) -> str:
+    if op.kind in (SOLD, FAILED, WITHDRAWN):
+        return _outcome_line(op)
     dto = op.dto
     bits: list[str] = [f"<code>{escape(dto.case_no)}</code>"]  # 사건번호 — 탭하면 복사
     area = dto.area_max or dto.area_min
@@ -54,7 +91,10 @@ def _op_line(op: AuctionOp) -> str:
     if op.kind != DATE_CHANGED:
         bits.append(f"매각 {_d(dto.sale_date)}")
     bits.append(_fail_label(dto.fail_count))
-    return f"{_TAG.get(op.kind, '•')} " + " · ".join(bits)
+    line = f"{_TAG.get(op.kind, '•')} " + " · ".join(bits)
+    if op.kind == NEW and dto.flags:  # ⚠ 지분매각·위반건축물 등 위험 플래그
+        line += "\n   ⚠️ " + " · ".join(escape(f) for f in dto.flags)
+    return line
 
 
 def _complex_block(cr: ComplexAuctionResult, starred: set[str]) -> list[str]:
@@ -83,6 +123,12 @@ def build_auction_digest(result: AuctionRunResult, dashboard_url: str) -> str:
     )
     if result.date_changed_count:
         head += f" · 기일변경 {result.date_changed_count}"
+    if result.sold_count:
+        head += f" · 매각 {result.sold_count}"
+    if result.failed_count:
+        head += f" · 유찰 {result.failed_count}"
+    if result.withdrawn_count:
+        head += f" · 취하 {result.withdrawn_count}"
     head += f" · 단지 {matched}곳"
     if result.missing_jibun:
         head += f"  ⚠지번미보유 {result.missing_jibun}"

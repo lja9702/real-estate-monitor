@@ -25,13 +25,27 @@ from ..constants import RunStatus, now_kst, to_iso
 from ..court.auction1_link import auction1_search_url, court_case_search_url
 from ..court.auction1_resolver import resolve_view_url
 from ..court.auction_parser import AuctionDTO
+from ..court.case_dxdy_parser import CHANGED, derive_outcome
+from ..court.case_dxdy_parser import FAILED as OUT_FAILED
+from ..court.case_dxdy_parser import SOLD as OUT_SOLD
+from ..court.case_dxdy_parser import WITHDRAWN as OUT_WITHDRAWN
 from ..court.client import CourtAuctionClient
+from ..court.endpoints import case_no_to_csno
 from ..court.errors import CourtAuctionApiError, CourtAuctionParseError
 from ..db import repo
 from ..db.engine import get_session, set_meta
 from ..db.models import Auction
 from ..settings import Config, Settings
-from .auction_diff import DATE_CHANGED, NEW, PRICE_DOWN, AuctionOp, diff_auctions
+from .auction_diff import (
+    DATE_CHANGED,
+    FAILED,
+    NEW,
+    PRICE_DOWN,
+    SOLD,
+    WITHDRAWN,
+    AuctionOp,
+    diff_auctions,
+)
 from .collector import _acquire_lock
 from .targets import ResolvedTarget, resolve_targets
 
@@ -95,6 +109,10 @@ class AuctionRunResult:
     new_count: int = 0
     price_down_count: int = 0
     date_changed_count: int = 0
+    sold_count: int = 0  # 정합: 매각(낙찰) 확정
+    failed_count: int = 0  # 정합: 유찰(재공고 다음기일)
+    withdrawn_count: int = 0  # 정합: 취하·취소 등 종국
+    reconciled_count: int = 0  # 정합으로 기일내역을 폴링한 물건 수
     errors: int = 0
     missing_jibun: int = 0  # 지번 미백필로 매칭에서 빠진 단지 수
     unmatched_court: int = 0  # 관할법원 미상 단지 수
@@ -103,7 +121,10 @@ class AuctionRunResult:
 
     @property
     def total_changes(self) -> int:
-        return self.new_count + self.price_down_count + self.date_changed_count
+        return (
+            self.new_count + self.price_down_count + self.date_changed_count
+            + self.sold_count + self.failed_count + self.withdrawn_count
+        )
 
 
 def _new_auction(
@@ -124,6 +145,7 @@ def _new_auction(
         min_bid_manwon=dto.min_bid_manwon,
         min_bid_ratio=dto.min_bid_ratio,
         fail_count=dto.fail_count,
+        remarks=dto.remarks,
         sale_date=dto.sale_date,
         status_code=dto.status_code,
         in_progress=dto.in_progress,
@@ -173,6 +195,8 @@ def _apply_auction_ops(
             row.min_bid_manwon = dto.min_bid_manwon
             row.min_bid_ratio = dto.min_bid_ratio
             row.fail_count = dto.fail_count
+            if dto.remarks:  # 비고는 갱신될 수 있음(빈값으로 덮어쓰지 않음)
+                row.remarks = dto.remarks
             row.sale_date = dto.sale_date
             row.status_code = dto.status_code
             row.in_progress = dto.in_progress
@@ -183,6 +207,147 @@ def _apply_auction_ops(
                 alerts.append(op)
     session.commit()
     return alerts
+
+
+def _dto_from_row(row: Auction) -> AuctionDTO:
+    """저장행 → 다이제스트 렌더용 최소 DTO(정합 결과 op 에 실어 보낸다)."""
+    return AuctionDTO(
+        auction_key=row.auction_key,
+        court_code=row.court_code,
+        court_name=row.court_name,
+        case_no=row.case_no or "?",
+        item_no=row.item_no,
+        address=row.address or "",
+        building_name=row.building_name,
+        usage_name=row.usage_name,
+        appraisal_manwon=row.appraisal_manwon,
+        min_bid_manwon=row.min_bid_manwon,
+        min_bid_ratio=row.min_bid_ratio,
+        fail_count=row.fail_count,
+        sale_date=row.sale_date,
+        area_max=row.area_excl,
+    )
+
+
+def _ratio(min_manwon: int | None, appraisal_manwon: int | None) -> int | None:
+    if min_manwon and appraisal_manwon and appraisal_manwon > 0:
+        return round(min_manwon / appraisal_manwon * 100)
+    return None
+
+
+@dataclass
+class ReconcileResult:
+    ops_by_complex: dict[str, list[AuctionOp]] = field(default_factory=dict)
+    sold: int = 0
+    failed: int = 0
+    withdrawn: int = 0
+    polled: int = 0
+
+
+def _reconcile_matured(
+    session: Session,
+    client: CourtAuctionClient,
+    config: Config,
+    today_iso: str,
+    now_s: str,
+) -> ReconcileResult:
+    """매각기일 지난(결과 미확정) 물건을 사건 기일내역으로 정합.
+
+    - 매각/취하 → outcome 확정(종국, in_progress=False) + 알림.
+    - 유찰·변경에 재공고된 다음 매각기일이 있으면 그 회차로 '재활성'(sale_date·최저가 갱신, outcome 미확정 유지)
+      → 다음 수집부터 다시 추적. 유찰은 알림(다음기일 안내).
+    - 미확정·다음기일 없음 → reconciled_at 만 갱신, 다음 회차에 재폴링(가장 오래된 것부터, 회차 상한).
+    """
+    rows = repo.get_auctions_to_reconcile(
+        session, today_iso, limit=config.auctions.reconcile_max
+    )
+    res = ReconcileResult(ops_by_complex=defaultdict(list))
+    for row in rows:
+        cs_no = case_no_to_csno(row.case_no or "")
+        if not (cs_no and row.court_code):
+            row.reconciled_at = now_s
+            session.add(row)
+            continue
+        try:
+            events = client.fetch_case_dxdy(row.court_code, cs_no)
+        except (CourtAuctionApiError, CourtAuctionParseError) as e:
+            log.warning("사건 기일내역 조회 실패 %s(%s): %s", row.case_no, row.court_code, e)
+            continue
+        res.polled += 1
+        outcome = derive_outcome(events, item_seq=row.item_no, today_iso=today_iso)
+        row.reconciled_at = now_s
+        op: AuctionOp | None = None
+
+        if outcome.outcome == OUT_SOLD:
+            row.outcome, row.outcome_label = "sold", outcome.label
+            row.final_bid_manwon, row.outcome_date = outcome.final_bid_manwon, outcome.outcome_date
+            row.in_progress = False
+            res.sold += 1
+            op = AuctionOp(
+                SOLD, _dto_from_row(row),
+                outcome_label=outcome.label, final_bid_manwon=outcome.final_bid_manwon,
+            )
+        elif outcome.outcome == OUT_WITHDRAWN:
+            row.outcome, row.outcome_label = "withdrawn", outcome.label
+            row.outcome_date, row.in_progress = outcome.outcome_date, False
+            res.withdrawn += 1
+            op = AuctionOp(WITHDRAWN, _dto_from_row(row), outcome_label=outcome.label)
+        elif outcome.outcome in (OUT_FAILED, CHANGED) and outcome.next_sale_date:
+            old_min, old_date = row.min_bid_manwon, row.sale_date
+            row.sale_date = outcome.next_sale_date
+            if outcome.next_min_bid_manwon is not None:
+                row.min_bid_manwon = outcome.next_min_bid_manwon
+                row.min_bid_ratio = _ratio(row.min_bid_manwon, row.appraisal_manwon)
+            row.in_progress = True  # 다음 회차로 재활성 — 추적 계속(outcome 미확정 유지)
+            if outcome.outcome == OUT_FAILED:
+                row.fail_count = (row.fail_count or 0) + 1
+                res.failed += 1
+                op = AuctionOp(
+                    FAILED, _dto_from_row(row), outcome_label=outcome.label,
+                    old_min_bid_manwon=old_min, old_sale_date=old_date,
+                    next_sale_date=outcome.next_sale_date,
+                )
+            elif config.auctions.notify_date_changed:
+                op = AuctionOp(DATE_CHANGED, _dto_from_row(row), old_sale_date=old_date)
+        elif outcome.outcome is None and outcome.next_sale_date and outcome.next_sale_date != row.sale_date:
+            # 결과 미확정이나 매각기일이 미래로 갱신(윈도우 밖 재공고) — 날짜만 동기화, 알림 없음.
+            row.sale_date = outcome.next_sale_date
+            if outcome.next_min_bid_manwon is not None:
+                row.min_bid_manwon = outcome.next_min_bid_manwon
+                row.min_bid_ratio = _ratio(row.min_bid_manwon, row.appraisal_manwon)
+            row.in_progress = True
+        # else: 미확정·다음기일 없음 → reconciled_at 만, 다음 회차 재폴링.
+
+        session.add(row)
+        if op is not None:
+            res.ops_by_complex[row.complex_no].append(op)
+    session.commit()
+    return res
+
+
+def _merge_reconcile_ops(
+    results: list[ComplexAuctionResult],
+    reconcile: ReconcileResult,
+    targets: list[ResolvedTarget],
+) -> None:
+    """정합 결과 op 를 단지별 결과에 합류. 이번 forward 대상에 없던 단지는 새 항목 추가."""
+    by_no = {r.complex_no: r for r in results}
+    label_by_no = {t.complex.complex_no: t for t in targets}
+    for complex_no, ops in reconcile.ops_by_complex.items():
+        if complex_no in by_no:
+            by_no[complex_no].ops.extend(ops)
+            continue
+        rt = label_by_no.get(complex_no)
+        name = rt.complex.name if rt else (ops[0].dto.building_name or "")
+        cr = ComplexAuctionResult(
+            complex_no,
+            rt.label if rt else complex_no,
+            name,
+            address=rt.complex.address if rt else (ops[0].dto.address or None),
+            ops=list(ops),
+        )
+        results.append(cr)
+        by_no[complex_no] = cr
 
 
 def _select_targets(config: Config, session: Session) -> tuple[list[ResolvedTarget], int]:
@@ -267,6 +432,7 @@ def _run(
 ) -> AuctionRunResult:
     now = now_kst()
     now_s = to_iso(now)
+    today_iso = now.strftime("%Y-%m-%d")  # 매각기일(ISO) 비교용 — 정합 대상 선별
     begin_s = now.strftime("%Y%m%d")
     end_s = (now + timedelta(days=config.auctions.days)).strftime("%Y%m%d")
 
@@ -327,6 +493,16 @@ def _run(
                             )
                         )
 
+            # 사후 정합: 매각기일 지난(미확정) 물건의 실제 결과(매각/유찰/취하)를 사건 기일내역으로 확정.
+            reconcile = ReconcileResult()
+            if config.auctions.reconcile:
+                try:
+                    reconcile = _reconcile_matured(session, client, config, today_iso, now_s)
+                except (CourtAuctionApiError, CourtAuctionParseError) as e:
+                    log.error("경매 결과 정합 실패: %s", e)
+                    errors += 1
+                _merge_reconcile_ops(results, reconcile, targets)
+
             new_count = sum(1 for r in results for o in r.ops if o.kind == NEW)
             price_down = sum(1 for r in results for o in r.ops if o.kind == PRICE_DOWN)
             date_changed = sum(1 for r in results for o in r.ops if o.kind == DATE_CHANGED)
@@ -360,6 +536,10 @@ def _run(
                 new_count=new_count,
                 price_down_count=price_down,
                 date_changed_count=date_changed,
+                sold_count=reconcile.sold,
+                failed_count=reconcile.failed,
+                withdrawn_count=reconcile.withdrawn,
+                reconciled_count=reconcile.polled,
                 errors=errors,
                 missing_jibun=missing_jibun,
                 unmatched_court=unmatched,
@@ -377,9 +557,11 @@ def _run(
                 client.close()
 
     log.info(
-        "법원경매 수집 완료 (run #%s, %s): 신규 %d · 최저가하락 %d · 기일변경 %d · 법원 %d · 오류 %d",
+        "법원경매 수집 완료 (run #%s, %s): 신규 %d · 최저가하락 %d · 기일변경 %d · "
+        "매각 %d · 유찰 %d · 취하 %d (정합폴링 %d) · 법원 %d · 오류 %d",
         run_id, result.status.value, result.new_count, result.price_down_count,
-        result.date_changed_count, result.court_count, result.errors,
+        result.date_changed_count, result.sold_count, result.failed_count,
+        result.withdrawn_count, result.reconciled_count, result.court_count, result.errors,
     )
 
     if notify is not None and (result.total_changes > 0 or config.auctions.notify_on_no_change):

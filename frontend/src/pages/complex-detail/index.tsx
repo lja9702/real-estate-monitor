@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { complexKeys, getComplex } from '@/entities/complex/api/get-complex'
 import type { ComplexRow, DealRow } from '@/entities/complex/model/types'
 import type { AuctionRow } from '@/entities/auction/model/types'
+import { AuctionDetailDialog } from '@/entities/auction/ui/auction-detail-dialog'
 import { Badge } from '@/components/ui/badge'
 import {
   Table,
@@ -125,7 +126,15 @@ function DealTable({ deals }: { deals: DealRow[] }) {
   )
 }
 
-function AuctionTable({ auctions, past }: { auctions: AuctionRow[]; past?: boolean }) {
+function AuctionTable({
+  auctions,
+  past,
+  onOpen,
+}: {
+  auctions: AuctionRow[]
+  past?: boolean
+  onOpen: (key: string) => void
+}) {
   return (
     <div className="overflow-x-auto rounded-lg border">
       <Table>
@@ -135,17 +144,32 @@ function AuctionTable({ auctions, past }: { auctions: AuctionRow[]; past?: boole
             <TableHead className="text-right whitespace-nowrap">감정가</TableHead>
             <TableHead className="text-right whitespace-nowrap">최저가</TableHead>
             <TableHead className="whitespace-nowrap">유찰</TableHead>
+            <TableHead className="whitespace-nowrap">비고</TableHead>
             <TableHead className="whitespace-nowrap">사건 / 법원</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {auctions.map((a) => (
-            <TableRow key={a.auction_key} className={past ? 'opacity-60' : ''}>
+            <TableRow
+              key={a.auction_key}
+              onClick={() => onOpen(a.auction_key)}
+              className={`cursor-pointer ${past ? 'opacity-60' : ''}`}
+            >
               <TableCell className="whitespace-nowrap tabular-nums">
                 {a.sale_date?.replace(/-/g, '.') ?? '-'}
                 {a.is_new && !past && (
                   <Badge variant="default" className="ml-1.5 h-4 px-1 text-[10px]">
                     신규
+                  </Badge>
+                )}
+                {a.outcome_label && (
+                  <Badge
+                    variant={a.outcome === 'sold' ? 'default' : 'secondary'}
+                    className="ml-1.5 h-4 px-1 text-[10px]"
+                  >
+                    {a.outcome === 'sold' && a.final_bid_manwon != null
+                      ? `매각 ${formatManwon(a.final_bid_manwon)}`
+                      : a.outcome_label}
                   </Badge>
                 )}
               </TableCell>
@@ -165,12 +189,28 @@ function AuctionTable({ auctions, past }: { auctions: AuctionRow[]; past?: boole
               <TableCell className="whitespace-nowrap text-sm">
                 {a.fail_count > 0 ? `${a.fail_count}회` : '신건'}
               </TableCell>
+              <TableCell className="max-w-[16rem] text-sm" title={a.remarks ?? undefined}>
+                {a.flags.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {a.flags.map((f) => (
+                      <Badge key={f} variant="destructive" className="h-4 px-1 text-[10px]">
+                        {f}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : a.remarks ? (
+                  <span className="line-clamp-1 text-xs text-muted-foreground">{a.remarks}</span>
+                ) : (
+                  <span className="text-muted-foreground">-</span>
+                )}
+              </TableCell>
               <TableCell className="whitespace-nowrap text-sm">
                 {a.court_url ? (
                   <a
                     href={a.court_url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
                     className="text-muted-foreground hover:underline"
                   >
                     {a.case_no} ↗
@@ -200,6 +240,7 @@ function todayLocal(): string {
 
 export function AuctionSection({ auctions }: { auctions: AuctionRow[] }) {
   const today = todayLocal()
+  const [detailKey, setDetailKey] = useState<string | null>(null)
   // 진행중 = 매각기일 미래/미정, 지난 = 매각기일이 오늘 이전(보관기간 내 = 최근 3개월).
   const ongoing = auctions
     .filter((a) => !a.sale_date || a.sale_date >= today)
@@ -217,6 +258,7 @@ export function AuctionSection({ auctions }: { auctions: AuctionRow[] }) {
         </p>
       ) : (
         <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">행을 누르면 기일내역·물건비고 상세를 봅니다.</p>
           <div>
             <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">
               진행중 ({ongoing.length}건)
@@ -226,7 +268,7 @@ export function AuctionSection({ auctions }: { auctions: AuctionRow[] }) {
                 진행중인 경매 없음
               </p>
             ) : (
-              <AuctionTable auctions={ongoing} />
+              <AuctionTable auctions={ongoing} onOpen={setDetailKey} />
             )}
           </div>
           {past.length > 0 && (
@@ -234,11 +276,12 @@ export function AuctionSection({ auctions }: { auctions: AuctionRow[] }) {
               <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">
                 지난 경매 ({past.length}건 · 최근 3개월)
               </h3>
-              <AuctionTable auctions={past} past />
+              <AuctionTable auctions={past} past onOpen={setDetailKey} />
             </div>
           )}
         </div>
       )}
+      <AuctionDetailDialog auctionKey={detailKey} onClose={() => setDetailKey(null)} />
     </section>
   )
 }

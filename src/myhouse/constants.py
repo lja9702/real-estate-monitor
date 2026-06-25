@@ -53,6 +53,8 @@ class EventType(str, Enum):
     PRICE_CHANGED = "PRICE_CHANGED"
     REMOVED = "REMOVED"
     REAPPEARED = "REAPPEARED"
+    REREGISTERED = "REREGISTERED"  # 같은 물건 재등록(확인갱신→새 매물번호) — 무음
+    SUPERSEDED = "SUPERSEDED"  # 재등록으로 대체된 옛 번호 정리 — 무음(거래완료 아님)
 
 
 class RunStatus(str, Enum):

@@ -16,7 +16,9 @@ COURT_AUCTION_BASE = "https://www.courtauction.go.kr"
 WARMUP_PATH = "/pgj/index.on?w2xPath=/pgj/ui/pgj100/PGJ151F00.xml&pgjId=151F00"
 SEARCH_PATH = "/pgj/pgjsearch/searchControllerMain.on"
 COURTS_PATH = "/pgj/pgjComm/selectCortOfcCdLst.on"
-CASE_DETAIL_PATH = "/pgj/pgj15A/selectAuctnCsSrchRslt.on"  # 사건 단위 상세(기일이력 등) — 추후
+# 사건 기일내역(매각/유찰/미납 결과·낙찰가·다음기일) — 매각기일 지난 물건 정합용. 라이브 검증 2026-06.
+# 바디 {"dma_srchDxdyDtsLst":{"cortOfcCd","csNo"}}, 헤더 sc-userid:SYSTEM. dspslGdsSeq 불필요(사건단위).
+CASE_DXDY_PATH = "/pgj/pgj15A/selectCsDtlDxdyDts.on"
 
 # POST 필수 헤더값 — 빠지면 빈 응답.
 SEARCH_SUBMISSION_ID = "mf_wfm_mainFrame_sbm_selectGdsDtlSrch"
@@ -43,8 +45,31 @@ def courts_url() -> str:
     return f"{COURT_AUCTION_BASE}{COURTS_PATH}"
 
 
+def case_dxdy_url() -> str:
+    return f"{COURT_AUCTION_BASE}{CASE_DXDY_PATH}"
+
+
 def search_referer() -> str:
     return warmup_url()
+
+
+def case_no_to_csno(case_no: str) -> str | None:
+    """표시 사건번호 '2025타경1678' → 내부 csNo '20250130001678'({년}+0130+{6자리}).
+
+    '0130' 은 부동산 경매(타경) 사건구분 코드(라이브 검증). 타경 형식이 아니면 None.
+    """
+    if "타경" not in case_no:
+        return None
+    year, _, seq = case_no.partition("타경")
+    year, seq = year.strip(), seq.strip()
+    if not (year.isdigit() and seq.isdigit()):
+        return None
+    return f"{year}0130{seq.zfill(6)}"
+
+
+def build_case_dxdy_body(court_code: str, cs_no: str) -> dict:
+    """사건 기일내역 조회 바디. cs_no 는 내부 csNo(case_no_to_csno 결과)."""
+    return {"dma_srchDxdyDtsLst": {"cortOfcCd": court_code, "csNo": cs_no}}
 
 
 def build_search_body(

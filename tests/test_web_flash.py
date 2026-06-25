@@ -93,6 +93,50 @@ def test_api_flash_filters(tmp_path):
         assert client.get("/api/flash" + qs).status_code == 200
 
 
+def test_api_flash_dedups_same_unit(tmp_path):
+    """같은 단지·평형·거래·가격이면 여러 중개사가 올린 동일매물 → 대표 1건으로 접고 dup_count 표기."""
+    db = tmp_path / "flash_dedup.db"
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "app": {"db_path": str(db), "request_delay_seconds": [0, 0]},
+                "defaults": {"trade_types": ["SALE"]},
+                "targets": [{"kind": "complex", "complex_no": "947", "label": "삼호1차"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    engine = make_engine(db)
+    init_db(engine)
+    now = to_iso(now_kst())
+    with get_session(engine) as s:
+        s.add(Complex(complex_no="947", name="삼호1차", address="서울시 서초구 방배동",
+                      first_seen_at=now, updated_at=now))
+        # 같은 23.5억·84㎡ SALE 를 중개사 3곳이 따로 등록(서로 다른 article_no). G1 만 ACTIVE.
+        for aid, status in [("G1", ListingStatus.ACTIVE),
+                            ("G2", ListingStatus.REMOVED),
+                            ("G3", ListingStatus.REMOVED)]:
+            s.add(Listing(article_no=aid, complex_no="947", trade_type=TradeType.SALE,
+                          price_deal=235000, area_excl=84.92, status=status,
+                          article_url=f"https://m.land.naver.com/article/info/{aid}"))
+        s.commit()
+        for i, aid in enumerate(["G1", "G2", "G3"]):
+            s.add(FlashDeal(article_no=aid, complex_no="947", trade_type=TradeType.SALE,
+                            area_excl=84.92, area_key=84, price_deal=235000, prior_floor=250000,
+                            drop_amount=15000, drop_pct=6.0, trigger="new",
+                            detected_at=now, detected_run_id=42 + i))
+        s.commit()
+
+    client = TestClient(create_app(str(cfg_path)))
+    data = client.get("/api/flash").json()
+    assert data["total"] == 1  # 3건이 1건으로 접힘
+    row = data["rows"][0]
+    assert row["article_no"] == "G1"  # 대표는 ACTIVE 매물
+    assert row["dup_count"] == 3
+
+
 def test_flash_route_serves_spa_shell(tmp_path):
     client = TestClient(create_app(str(_seed(tmp_path))))
     r = client.get("/flash")

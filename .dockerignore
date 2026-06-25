@@ -1,0 +1,28 @@
+# 빌드 컨텍스트 최소화 — 이미지엔 소스·config 만 필요(데이터/비밀/캐시 제외)
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# 노드/빌드 산출물(이미지 안에서 새로 빌드)
+node_modules
+frontend/node_modules
+frontend/dist
+src/myhouse/web/dist
+
+# 런타임 데이터·비밀·로그(클라우드는 R2 에서 DB 를 받는다)
+data
+logs
+*.db
+*.db-wal
+*.db-shm
+.env
+.collector.lock
+
+# 문서/기타
+tests
+.claude
+*.md
+HANDOFF.md

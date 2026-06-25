@@ -317,9 +317,17 @@ class Auction(SQLModel, table=True):
     min_bid_manwon: int | None = None  # 최저매각가(만원)
     min_bid_ratio: int | None = None  # 최저가/감정가 %
     fail_count: int = 0  # 유찰횟수
+    remarks: str | None = None  # 물건비고(mulBigo) — 지분매각·위반건축물·대지권 등 권리/하자
     sale_date: str | None = None  # 매각기일 ISO
     status_code: str | None = None  # 물건상태(mulStatcd)
     in_progress: bool = True  # 진행 여부(mulJinYn)
+    # 사후 정합(사건 기일내역) 결과 — forward 검색에서 사라진(매각기일 지난) 물건의 실제 결말.
+    outcome: str | None = None  # sold/failed/withdrawn/changed (None=미확정·진행중)
+    outcome_label: str | None = None  # 사람용 라벨("매각"·"유찰"·"재매각(대금미납)"·"취하")
+    final_bid_manwon: int | None = None  # 낙찰가(만원, 매각 시)
+    outcome_date: str | None = None  # 결과 확정 회차 날짜 ISO
+    next_sale_date: str | None = None  # 유찰/변경 시 재공고된 다음 매각기일 ISO
+    reconciled_at: str | None = None  # 마지막 기일내역 정합 시각(반복 폴링 방지)
     auction1_url: str | None = None  # 옥션원 딥링크
     court_url: str | None = None  # 법원경매 사건검색 딥링크
     first_seen_at: str = ""
@@ -336,7 +344,9 @@ class Meta(SQLModel, table=True):
     value: str | None = None
 
 
-SCHEMA_VERSION = "14"  # 14: run.complexes_done — 수집 실행 중 단지 진행률(실시간)
+SCHEMA_VERSION = "16"  # 16: auction.remarks — 물건비고(지분매각·위반건축물 등 위험플래그)
+# 15: auction 결과 정합 컬럼(outcome/final_bid/outcome_date/next_sale_date 등)
+# 14: run.complexes_done — 수집 실행 중 단지 진행률(실시간)
 # 12: 급매(flash_deal) 테이블 — 같은 평수 직전 호가하한 ≥임계 언더컷 탐지·적재
 # 11: 유저별 단지 구독(subscription) — /add 소유 추적 + /list·알림 개인화
 # 10: 구독자 승인(subscriber.approved) — /join 초대코드 셀프등록

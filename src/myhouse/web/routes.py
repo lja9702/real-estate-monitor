@@ -7,14 +7,24 @@ import os
 import subprocess
 import sys
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlmodel import Session
 
 from ..constants import SOURCE_WEB
 from ..core import on_demand
+from ..core.auction_detail import get_case_events
 from ..db import repo
 from ..db.engine import get_meta
+from ..db.models import Auction
+from .auth import (
+    COOKIE_NAME,
+    MAX_AGE_SECONDS,
+    cookie_is_secure,
+    gate_page,
+    safe_next,
+    sign_token,
+)
 from .queries import (
     AuctionFilters,
     DealFilters,
@@ -25,6 +35,7 @@ from .queries import (
     auction_address_option_map,
     auction_complexes,
     build_area_group_rows,
+    build_auction_detail,
     build_auction_rows,
     build_cluster_rows,
     build_deal_rows,
@@ -49,6 +60,46 @@ from .queries import (
 )
 
 router = APIRouter()
+
+
+# ── 초대코드 게이트 ─────────────────────────────────────────────────────────
+@router.get("/healthz")
+def healthz():
+    """헬스체크(클라우드 상시 호스트용) — 게이트 없이 통과."""
+    return {"ok": True}
+
+
+@router.get("/gate", response_class=HTMLResponse)
+def gate_get(request: Request):
+    return gate_page(next_path=request.query_params.get("next", "/"))
+
+
+@router.post("/gate")
+def gate_post(request: Request, code: str = Form(...), next: str = Form("/")):
+    settings = request.app.state.settings
+    dest = safe_next(next)
+    if code.strip() in settings.web_invite_code_set:
+        resp = RedirectResponse(url=dest, status_code=303)
+        resp.set_cookie(
+            COOKIE_NAME,
+            sign_token(settings.gate_signing_secret),
+            max_age=MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+            secure=cookie_is_secure(request),
+        )
+        return resp
+    return HTMLResponse(gate_page(next_path=dest, error=True), status_code=401)
+
+
+@router.get("/api/me")
+def api_me(request: Request):
+    """현재 세션 역할 + 읽기전용 여부(프론트가 쓰기 컨트롤을 숨기는 데 사용)."""
+    return {
+        "authenticated": True,
+        "role": getattr(request.state, "role", "member"),
+        "readonly": bool(request.app.state.settings.cloud_readonly),
+    }
 
 
 # ── 의존성 ─────────────────────────────────────────────────────────────────
@@ -342,6 +393,29 @@ def api_auctions(
         ],
         "gu_list": sorted(auction_address_option_map(session).keys()),
     }
+
+
+@router.get("/api/auction/{auction_key}")
+def api_auction_detail(
+    auction_key: str,
+    request: Request,
+    session: Session = Depends(get_session_dep),
+):
+    """물건 1건 상세 — 저장행 + 기일내역(매각/유찰 이력). 기일내역은 온디맨드 fetch·TTL 캐시.
+
+    cloud_readonly(쓰기·수집 금지) 환경에선 라이브 fetch 없이 캐시만 반환.
+    """
+    row = session.get(Auction, auction_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail="경매 물건을 찾을 수 없습니다.")
+    settings = request.app.state.settings
+    config = request.app.state.config
+    events = get_case_events(
+        row,
+        allow_fetch=not settings.cloud_readonly,
+        delay=config.app.request_delay_seconds,
+    )
+    return build_auction_detail(session, auction_key, events)
 
 
 @router.get("/api/flash")

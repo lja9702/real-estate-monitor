@@ -21,6 +21,7 @@ export interface FlashRow {
   status: string // ACTIVE / PENDING_REMOVAL / REMOVED / GONE
   article_url: string | null
   is_new: boolean
+  dup_count: number // 같은 단지·평형·거래·가격의 동일매물 수(대표 1건만 표시)
   total_households: number | null
   use_approve_ymd: string | null
 }

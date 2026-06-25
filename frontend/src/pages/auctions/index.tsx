@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { auctionKeys, getAuctions } from '@/entities/auction/api/get-auctions'
 import { AUCTION_FILTER_DEFAULTS } from '@/entities/auction/model/types'
 import type { AuctionFilters } from '@/entities/auction/model/types'
+import { AuctionDetailDialog } from '@/entities/auction/ui/auction-detail-dialog'
 import { Badge } from '@/components/ui/badge'
 import {
   Table,
@@ -35,6 +37,7 @@ function parseFilters(sp: URLSearchParams): AuctionFilters {
 
 export function AuctionsPage() {
   const [sp, setSp] = useSearchParams()
+  const [detailKey, setDetailKey] = useState<string | null>(null)
   const filters = parseFilters(sp)
 
   function set(key: keyof AuctionFilters, value: string) {
@@ -140,12 +143,30 @@ export function AuctionsPage() {
             </TableHeader>
             <TableBody>
               {data.rows.map((r) => (
-                <TableRow key={r.auction_key}>
+                <TableRow
+                  key={r.auction_key}
+                  onClick={() => setDetailKey(r.auction_key)}
+                  className="cursor-pointer"
+                >
                   <TableCell className="whitespace-nowrap tabular-nums text-sm">
                     {r.sale_date?.replace(/-/g, '.') ?? '-'}
+                    {r.outcome_label && (
+                      <Badge
+                        variant={r.outcome === 'sold' ? 'default' : 'secondary'}
+                        className="ml-1.5 h-4 px-1 text-[10px]"
+                      >
+                        {r.outcome === 'sold' && r.final_bid_manwon != null
+                          ? `매각 ${eok(r.final_bid_manwon)}`
+                          : r.outcome_label}
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>
-                    <Link to={`/complex/${r.complex_no}`} className="font-medium hover:underline">
+                    <Link
+                      to={`/complex/${r.complex_no}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="font-medium hover:underline"
+                    >
                       {r.complex_name}
                     </Link>
                     {r.is_new && (
@@ -153,6 +174,15 @@ export function AuctionsPage() {
                     )}
                     {r.address_short && (
                       <div className="text-xs text-muted-foreground">{r.address_short}</div>
+                    )}
+                    {r.flags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1" title={r.remarks ?? undefined}>
+                        {r.flags.map((f) => (
+                          <Badge key={f} variant="destructive" className="h-4 px-1 text-[10px]">
+                            {f}
+                          </Badge>
+                        ))}
+                      </div>
                     )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-right tabular-nums text-sm">
@@ -177,6 +207,7 @@ export function AuctionsPage() {
                         href={r.court_url}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
                         className="text-muted-foreground hover:underline"
                       >
                         {r.case_no} ↗
@@ -194,6 +225,7 @@ export function AuctionsPage() {
           </Table>
         </div>
       )}
+      <AuctionDetailDialog auctionKey={detailKey} onClose={() => setDetailKey(null)} />
     </div>
   )
 }

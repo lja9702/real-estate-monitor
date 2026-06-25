@@ -6,6 +6,7 @@ import pytest
 
 from myhouse.court.auction_parser import (
     AuctionDTO,
+    extract_flags,
     parse_auction_row,
     parse_auctions,
 )
@@ -103,3 +104,29 @@ def test_missing_data_raises():
 def test_parse_row_skips_without_key():
     assert parse_auction_row({"srnSaNo": "2024타경1", "daepyoLotno": "1"}) is None  # docid 없음
     assert isinstance(parse_auction_row(PAYLOAD["data"]["dlt_srchResult"][0]), AuctionDTO)
+
+
+# 라이브 검증된 물건비고 원문(서울동부 2022타경52802 자양오피스텔) — 플래그 추출 회귀.
+_REAL_BIGO = (
+    "1. 대지지분 없음(건물만 매각)\n"
+    "2. 지분 매각임. 공유자우선매수권 행사 1회 제한 \n"
+    "5. 감정서에 의하면 ... 위반건축물이 등재되어 있음."
+)
+
+
+def test_extract_flags_real_remark():
+    flags = extract_flags(_REAL_BIGO)
+    assert "지분매각" in flags
+    assert "위반건축물" in flags
+    assert "대지권미포함" in flags
+
+
+def test_extract_flags_empty():
+    assert extract_flags(None) == []
+    assert extract_flags("특이사항 없음") == []
+
+
+def test_flags_property_from_mulbigo():
+    dto = parse_auction_row({**PAYLOAD["data"]["dlt_srchResult"][0], "mulBigo": "지분 매각임"})
+    assert dto.remarks == "지분 매각임"
+    assert dto.flags == ["지분매각"]

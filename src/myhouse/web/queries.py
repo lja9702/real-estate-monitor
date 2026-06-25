@@ -15,6 +15,7 @@ from sqlmodel import Session, func, select
 
 from ..constants import SOURCE_KO, TRADE_TYPE_KO, ListingStatus, TradeType, now_kst
 from ..core.dedup import price_range
+from ..court.auction_parser import extract_flags
 from ..db.models import (
     Auction,
     Complex,
@@ -1160,6 +1161,12 @@ class AuctionRow:
     status_code: str | None
     in_progress: bool
     court_url: str | None
+    remarks: str | None = None  # 물건비고 원문
+    flags: list[str] = field(default_factory=list)  # 비고서 추출한 위험 플래그
+    outcome: str | None = None  # sold/failed/withdrawn (None=진행중)
+    outcome_label: str | None = None  # "매각"·"유찰"·"취하" 등
+    final_bid_manwon: int | None = None  # 낙찰가(매각 시)
+    outcome_date: str | None = None
     is_new: bool = False
     starred: bool = False
 
@@ -1214,6 +1221,12 @@ def build_auction_rows(
             status_code=a.status_code,
             in_progress=a.in_progress,
             court_url=a.court_url,
+            remarks=a.remarks,
+            flags=extract_flags(a.remarks),
+            outcome=a.outcome,
+            outcome_label=a.outcome_label,
+            final_bid_manwon=a.final_bid_manwon,
+            outcome_date=a.outcome_date,
             is_new=bool(last_auction_run_id) and a.first_seen_run_id == last_auction_run_id,
             starred=bool(cx and cx.starred),
         ))
@@ -1225,6 +1238,50 @@ def build_auction_rows(
     else:  # date_asc — 매각기일 가까운 순(기본)
         rows.sort(key=lambda r: (r.sale_date or "9999-99-99"))
     return rows[:limit]
+
+
+def build_auction_detail(session: Session, auction_key: str, events: list) -> dict | None:
+    """물건 1건 상세 — 저장행 + 기일내역(events). 행이 없으면 None.
+
+    events 는 core.auction_detail.get_case_events 결과(AuctionDateEvent 리스트).
+    """
+    a = session.get(Auction, auction_key)
+    if a is None:
+        return None
+    cx = session.get(Complex, a.complex_no)
+    return {
+        "auction_key": a.auction_key,
+        "complex_no": a.complex_no,
+        "complex_name": cx.name if cx and cx.name else a.complex_no,
+        "case_no": a.case_no,
+        "court_name": a.court_name,
+        "court_url": a.court_url,
+        "address": a.address or "",
+        "building_name": a.building_name,
+        "area_excl": a.area_excl,
+        "appraisal_manwon": a.appraisal_manwon,
+        "min_bid_manwon": a.min_bid_manwon,
+        "min_bid_ratio": a.min_bid_ratio,
+        "fail_count": a.fail_count,
+        "sale_date": a.sale_date,
+        "in_progress": a.in_progress,
+        "outcome": a.outcome,
+        "outcome_label": a.outcome_label,
+        "final_bid_manwon": a.final_bid_manwon,
+        "outcome_date": a.outcome_date,
+        "next_sale_date": a.next_sale_date,
+        "remarks": a.remarks,
+        "flags": extract_flags(a.remarks),
+        "events": [
+            {
+                "date": e.date,
+                "kind": e.kind,
+                "result": e.result,
+                "low_price_manwon": e.low_price_manwon,
+            }
+            for e in events
+        ],
+    }
 
 
 def auction_complexes(session: Session) -> list[Complex]:
@@ -1287,6 +1344,7 @@ class FlashRow:
     status: str            # 현재 listing 상태: ACTIVE/PENDING_REMOVAL/REMOVED/GONE
     article_url: str | None
     is_new: bool = False
+    dup_count: int = 1     # 같은 단지·평형·거래·가격의 동일매물(중개사 중복 등록) 수 — 대표 1건만 표시
     total_households: int | None = None
     use_approve_ymd: str | None = None
 
@@ -1348,8 +1406,22 @@ def build_flash_rows(
     }
     cx_map = {c.complex_no: c for c in session.exec(select(Complex))}
 
-    rows: list[FlashRow] = []
+    # 동일매물 중복 제거 — 같은 단지·평형·거래유형·가격이면 여러 중개사가 같은 물건을 올린 것이라
+    # 별개 article_no 라도 한 건의 급매다. 대표 1건만 남기고(ACTIVE 우선, 그다음 최초 발생순)
+    # 나머지 수는 dup_count 로 표기한다.
+    groups: dict[tuple, list[FlashDeal]] = {}
     for fl in flashes:
+        groups.setdefault((fl.complex_no, fl.area_key, fl.trade_type, fl.price_deal), []).append(fl)
+
+    def _rep_key(fl: FlashDeal) -> tuple:
+        lst = listings.get(fl.article_no)
+        active = lst is not None and lst.status == ListingStatus.ACTIVE
+        return (0 if active else 1, fl.detected_at, fl.article_no)
+
+    deduped = [(min(members, key=_rep_key), len(members)) for members in groups.values()]
+
+    rows: list[FlashRow] = []
+    for fl, dup_count in deduped:
         lst = listings.get(fl.article_no)
         cx = cx_map.get(fl.complex_no)
         rows.append(FlashRow(
@@ -1378,6 +1450,7 @@ def build_flash_rows(
             status=lst.status.value if lst else "GONE",
             article_url=lst.article_url if lst else None,
             is_new=bool(last_run_id) and fl.detected_run_id == last_run_id,
+            dup_count=dup_count,
             total_households=cx.total_households if cx else None,
             use_approve_ymd=cx.use_approve_ymd if cx else None,
         ))

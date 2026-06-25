@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     telegram_join_code: str | None = None  # 초대코드 — /join <코드> 로 셀프 등록(미설정이면 셀프조인 off)
     naver_map_client_id: str | None = None
     auction1_cookie: str | None = None  # 옥션원 세션 쿠키(딥링크 해석용) — 만료 시 진입점 폴백
+    web_invite_codes: str | None = None  # 웹 전용 추가 초대코드(쉼표 복수). TELEGRAM_JOIN_CODE 도 자동 수용. 둘 다 비면 게이트 off
+    session_secret: str | None = None  # 게이트 쿠키 HMAC 서명 키(랜덤 권장). 미설정이면 초대코드에서 파생
+    gate_local_bypass: bool = True  # localhost(루프백·프록시 미경유) 접속은 게이트 면제(운영자 로컬 편의)
+    cloud_readonly: bool = False  # 클라우드 읽기 전용 모드 — DB ro 오픈 + 쓰기/수집 트리거 전부 403
+    # DB 동기화(맥 push ↔ 클라우드 pull) — Cloudflare R2(S3 호환). 비면 동기화 비활성.
+    r2_account_id: str | None = None  # R2 계정 ID(엔드포인트 <id>.r2.cloudflarestorage.com)
+    r2_access_key_id: str | None = None
+    r2_secret_access_key: str | None = None
+    r2_bucket: str | None = None
+    r2_db_key: str = "myhouse.db"  # 버킷 내 DB 오브젝트 키
+    sync_pull_interval_seconds: int = 600  # 클라우드가 최신 DB 를 다시 받는 주기(초)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -50,6 +61,33 @@ class Settings(BaseSettings):
         빈 리스트면 '전체 허용'(역호환). 지인 소수 개방 시 여기에 chat_id 를 명시한다.
         """
         return self._split_ids(self.telegram_allowlist) or self.telegram_chat_ids
+
+    @property
+    def web_invite_code_set(self) -> set[str]:
+        """웹 초대코드 집합 — WEB_INVITE_CODES + TELEGRAM_JOIN_CODE(동일 코드 재사용).
+
+        지인은 텔레그램 `/join` 과 같은 코드로 웹에 입장한다. 둘 다 비어 있으면
+        게이트 비활성(전체 허용·역호환).
+        """
+        codes = {c.strip() for c in (self.web_invite_codes or "").split(",") if c.strip()}
+        if self.telegram_join_code and self.telegram_join_code.strip():
+            codes.add(self.telegram_join_code.strip())
+        return codes
+
+    @property
+    def web_gate_enabled(self) -> bool:
+        """초대코드(웹 또는 텔레그램 JOIN)가 하나라도 설정되면 게이트 활성."""
+        return bool(self.web_invite_code_set)
+
+    @property
+    def gate_signing_secret(self) -> str:
+        """쿠키 서명 키. SESSION_SECRET 우선, 없으면 설정된 초대코드에서 파생(상수 키 회피)."""
+        return (
+            self.session_secret
+            or self.web_invite_codes
+            or self.telegram_join_code
+            or "myhouse-dev-secret"
+        )
 
 
 class FilterSpec(BaseModel):
@@ -165,6 +203,9 @@ class AuctionsConfig(BaseModel):
     notify_date_changed: bool = False  # 매각기일 변경도 알릴지(기본: 신규·최저가하락만)
     notify_on_no_change: bool = False  # 변동 0건이어도 알림 보낼지
     resolve_auction1: bool = False  # 옥션원 직링크 해석(기본 off — 알림은 법원경매 공식 링크). True+쿠키면 활성
+    reconcile: bool = True  # 매각기일 지난 물건을 사건 기일내역으로 정합(매각/유찰/취하 확정)
+    reconcile_max: int = 40  # 회차당 최대 정합 폴링 건수(차단 회피 상한)
+    notify_outcomes: bool = True  # 매각/유찰/취하 결과를 알릴지
 
 
 class FlashConfig(BaseModel):
