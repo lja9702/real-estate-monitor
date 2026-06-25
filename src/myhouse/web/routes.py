@@ -78,27 +78,40 @@ def gate_get(request: Request):
 def gate_post(request: Request, code: str = Form(...), next: str = Form("/")):
     settings = request.app.state.settings
     dest = safe_next(next)
-    if code.strip() in settings.web_invite_code_set:
-        resp = RedirectResponse(url=dest, status_code=303)
-        resp.set_cookie(
-            COOKIE_NAME,
-            sign_token(settings.gate_signing_secret),
-            max_age=MAX_AGE_SECONDS,
-            httponly=True,
-            samesite="lax",
-            secure=cookie_is_secure(request),
-        )
-        return resp
-    return HTMLResponse(gate_page(next_path=dest, error=True), status_code=401)
+    code = code.strip()
+    if code in settings.web_admin_code_set:
+        role = "admin"  # 운영자 — 수집 등 쓰기 UI 노출
+    elif code in settings.web_invite_code_set:
+        role = "member"  # 지인 — 읽기만
+    else:
+        return HTMLResponse(gate_page(next_path=dest, error=True), status_code=401)
+    resp = RedirectResponse(url=dest, status_code=303)
+    resp.set_cookie(
+        COOKIE_NAME,
+        sign_token(settings.gate_signing_secret, role),
+        max_age=MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=cookie_is_secure(request),
+    )
+    return resp
 
 
 @router.get("/api/me")
 def api_me(request: Request):
-    """현재 세션 역할 + 읽기전용 여부(프론트가 쓰기 컨트롤을 숨기는 데 사용)."""
+    """현재 세션 역할 + 읽기전용 여부(프론트가 수집/쓰기 컨트롤을 숨기는 데 사용).
+
+    role: admin(운영자 코드) · local(localhost 면제) · member(지인 코드). 게이트 비활성이면
+    전체 허용=신뢰 환경이므로 local 로 본다.
+    """
+    settings = request.app.state.settings
+    role = getattr(request.state, "role", None)
+    if role is None:
+        role = "member" if settings.web_gate_enabled else "local"
     return {
         "authenticated": True,
-        "role": getattr(request.state, "role", "member"),
-        "readonly": bool(request.app.state.settings.cloud_readonly),
+        "role": role,
+        "readonly": bool(settings.cloud_readonly),
     }
 
 

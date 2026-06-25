@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { apiPostForm } from '@/shared/api/client'
+import { apiGet, apiPostForm } from '@/shared/api/client'
+
+type Me = { authenticated: boolean; role: string; readonly: boolean }
 
 const NAV_LINKS: Array<{ to: string; label: string; end?: true }> = [
   { to: '/', label: '매물', end: true },
@@ -115,6 +118,12 @@ function RunButton({ label, endpoint, kind }: { label: string; endpoint: string;
 }
 
 export function RootLayout() {
+  const me = useQuery({ queryKey: ['me'], queryFn: () => apiGet<Me>('/api/me') })
+  // 수집 버튼은 쓰기 가능한 서버(readonly 아님) + 운영자(admin)/로컬에서만 노출.
+  // 클라우드(읽기전용)에선 전원 숨김, 지인(member)에게도 숨김.
+  const canCollect =
+    !!me.data && !me.data.readonly && (me.data.role === 'admin' || me.data.role === 'local')
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-30 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/75">
@@ -147,13 +156,15 @@ export function RootLayout() {
             ))}
           </nav>
 
-          {/* 수집 버튼 */}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            <RunButton label="지금 수집" endpoint="/run" kind="listings" />
-            <RunButton label="실거래 수집" endpoint="/run-deals" kind="deals" />
-            <RunButton label="허가 수집" endpoint="/run-permits" kind="permits" />
-            <RunButton label="경매 수집" endpoint="/run-auctions" kind="auctions" />
-          </div>
+          {/* 수집 버튼 — 운영자(admin)/로컬 + 쓰기 가능 서버에서만 노출 */}
+          {canCollect && (
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              <RunButton label="지금 수집" endpoint="/run" kind="listings" />
+              <RunButton label="실거래 수집" endpoint="/run-deals" kind="deals" />
+              <RunButton label="허가 수집" endpoint="/run-permits" kind="permits" />
+              <RunButton label="경매 수집" endpoint="/run-auctions" kind="auctions" />
+            </div>
+          )}
         </div>
       </header>
 

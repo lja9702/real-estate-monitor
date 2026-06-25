@@ -15,9 +15,10 @@ def _app(
     *,
     codes: str | None = None,
     join_code: str | None = None,
+    admin_codes: str | None = None,
     local_bypass: bool = True,
 ):
-    """최소 설정으로 앱 생성. codes/join_code 가 주어지면 게이트 활성(설정 주입)."""
+    """최소 설정으로 앱 생성. codes/join_code/admin_codes 가 주어지면 게이트 활성(설정 주입)."""
     db = tmp_path / "gate.db"
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(
@@ -37,6 +38,7 @@ def _app(
         _env_file=None,
         web_invite_codes=codes,
         telegram_join_code=join_code,
+        web_admin_codes=admin_codes,
         session_secret="testsecret",
         gate_local_bypass=local_bypass,
     )
@@ -111,6 +113,33 @@ def test_gate_login_flow(tmp_path):
     assert client.get("/api/listings").status_code == 200
     assert client.get("/api/me").json() == {"authenticated": True, "role": "member", "readonly": False}
     assert 'id="root"' in client.get("/").text
+
+
+def test_admin_code_grants_admin_role(tmp_path):
+    """운영자 코드로 입장하면 role=admin, 지인 코드는 role=member."""
+    # 비루프백(원격) 클라이언트로 코드 경로를 탄다(로컬 면제 회피).
+    member = TestClient(_app(tmp_path, codes="friend", admin_codes="bossKey"), client=("203.0.113.9", 1))
+    member.post("/gate", data={"code": "friend"}, follow_redirects=False)
+    assert member.get("/api/me").json()["role"] == "member"
+
+    admin = TestClient(_app(tmp_path, codes="friend", admin_codes="bossKey"), client=("203.0.113.9", 1))
+    r = admin.post("/gate", data={"code": "bossKey"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert admin.get("/api/me").json()["role"] == "admin"
+
+
+def test_admin_code_alone_enables_gate(tmp_path):
+    """admin 코드만 설정해도 게이트가 켜진다(지인 코드 없이 운영자 전용)."""
+    client = TestClient(_app(tmp_path, admin_codes="bossKey"), client=("203.0.113.9", 1))
+    assert client.get("/api/listings").status_code == 401
+    client.post("/gate", data={"code": "bossKey"}, follow_redirects=False)
+    assert client.get("/api/me").json()["role"] == "admin"
+
+
+def test_gate_disabled_role_is_local(tmp_path):
+    """게이트 비활성(코드 없음)=신뢰 환경 → role=local(수집 UI 노출)."""
+    client = TestClient(_app(tmp_path))
+    assert client.get("/api/me").json()["role"] == "local"
 
 
 def test_local_bypass_allows_loopback(tmp_path):

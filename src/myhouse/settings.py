@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     naver_map_client_id: str | None = None
     auction1_cookie: str | None = None  # 옥션원 세션 쿠키(딥링크 해석용) — 만료 시 진입점 폴백
     web_invite_codes: str | None = None  # 웹 전용 추가 초대코드(쉼표 복수). TELEGRAM_JOIN_CODE 도 자동 수용. 둘 다 비면 게이트 off
+    web_admin_codes: str | None = None  # 운영자(admin) 코드(쉼표 복수) — 수집 트리거 등 쓰기 UI 노출. invite 보다 상위
     session_secret: str | None = None  # 게이트 쿠키 HMAC 서명 키(랜덤 권장). 미설정이면 초대코드에서 파생
     gate_local_bypass: bool = True  # localhost(루프백·프록시 미경유) 접속은 게이트 면제(운영자 로컬 편의)
     cloud_readonly: bool = False  # 클라우드 읽기 전용 모드 — DB ro 오픈 + 쓰기/수집 트리거 전부 403
@@ -75,16 +76,22 @@ class Settings(BaseSettings):
         return codes
 
     @property
+    def web_admin_code_set(self) -> set[str]:
+        """운영자(admin) 코드 집합. 이 코드로 입장하면 role=admin(수집 등 쓰기 UI 노출)."""
+        return {c.strip() for c in (self.web_admin_codes or "").split(",") if c.strip()}
+
+    @property
     def web_gate_enabled(self) -> bool:
-        """초대코드(웹 또는 텔레그램 JOIN)가 하나라도 설정되면 게이트 활성."""
-        return bool(self.web_invite_code_set)
+        """초대코드(웹·텔레그램 JOIN) 또는 admin 코드가 하나라도 설정되면 게이트 활성."""
+        return bool(self.web_invite_code_set or self.web_admin_code_set)
 
     @property
     def gate_signing_secret(self) -> str:
-        """쿠키 서명 키. SESSION_SECRET 우선, 없으면 설정된 초대코드에서 파생(상수 키 회피)."""
+        """쿠키 서명 키. SESSION_SECRET 우선, 없으면 설정된 코드에서 파생(상수 키 회피)."""
         return (
             self.session_secret
             or self.web_invite_codes
+            or self.web_admin_codes
             or self.telegram_join_code
             or "myhouse-dev-secret"
         )
