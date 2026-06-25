@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { apiGet, apiPostForm } from '@/shared/api/client'
-
-type Me = { authenticated: boolean; role: string; readonly: boolean }
+import { apiPostForm } from '@/shared/api/client'
+import { useMe, canWrite } from '@/shared/api/session'
 
 const NAV_LINKS: Array<{ to: string; label: string; end?: true }> = [
   { to: '/', label: '매물', end: true },
@@ -118,11 +116,10 @@ function RunButton({ label, endpoint, kind }: { label: string; endpoint: string;
 }
 
 export function RootLayout() {
-  const me = useQuery({ queryKey: ['me'], queryFn: () => apiGet<Me>('/api/me') })
+  const me = useMe()
   // 수집 버튼은 쓰기 가능한 서버(readonly 아님) + 운영자(admin)/로컬에서만 노출.
   // 클라우드(읽기전용)에선 전원 숨김, 지인(member)에게도 숨김.
-  const canCollect =
-    !!me.data && !me.data.readonly && (me.data.role === 'admin' || me.data.role === 'local')
+  const canCollect = canWrite(me.data)
 
   return (
     <div className="min-h-screen bg-background text-foreground">

@@ -6,6 +6,7 @@ import {
   trackComplex,
   untrackComplex,
 } from '@/entities/complex/api/get-complexes'
+import { useMe, canWrite } from '@/shared/api/session'
 import type { TrackingRow } from '@/entities/complex/model/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,10 +22,12 @@ function ComplexTable({
   rows,
   onToggle,
   pendingNo,
+  writable,
 }: {
   rows: TrackingRow[]
   onToggle: (row: TrackingRow) => void
   pendingNo: string | null
+  writable: boolean
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border">
@@ -53,15 +56,17 @@ function ComplexTable({
               <TableCell className="text-sm text-muted-foreground">{r.source_ko}</TableCell>
               <TableCell className="text-right tabular-nums">{r.active_count}</TableCell>
               <TableCell>
-                <Button
-                  size="sm"
-                  variant={r.is_active ? 'outline' : 'default'}
-                  disabled={pendingNo === r.complex_no}
-                  onClick={() => onToggle(r)}
-                  className="h-7 text-xs"
-                >
-                  {pendingNo === r.complex_no ? '…' : r.is_active ? '추적 중단' : '추적 재개'}
-                </Button>
+                {writable && (
+                  <Button
+                    size="sm"
+                    variant={r.is_active ? 'outline' : 'default'}
+                    disabled={pendingNo === r.complex_no}
+                    onClick={() => onToggle(r)}
+                    className="h-7 text-xs"
+                  >
+                    {pendingNo === r.complex_no ? '…' : r.is_active ? '추적 중단' : '추적 재개'}
+                  </Button>
+                )}
               </TableCell>
             </TableRow>
           ))}
@@ -74,6 +79,8 @@ function ComplexTable({
 export function ComplexesPage() {
   const qc = useQueryClient()
   const query = useQuery({ queryKey: complexesKeys.all, queryFn: getComplexes })
+  const me = useMe()
+  const writable = canWrite(me.data) // 운영자/로컬에서만 추적 변경 가능
 
   const mutation = useMutation({
     mutationFn: (row: TrackingRow) =>
@@ -98,6 +105,14 @@ export function ComplexesPage() {
         <div />
       </div>
 
+      {!writable && (
+        <p className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
+          추적 단지 변경은 운영자만 할 수 있어요.{' '}
+          <span className="font-medium text-foreground">추적 중단</span>이 필요하면 텔레그램 봇으로
+          개별 요청해 주세요.
+        </p>
+      )}
+
       {query.isError ? (
         <p className="rounded-lg border border-destructive/50 p-8 text-center text-sm text-destructive">
           불러오기 실패: {String(query.error)}
@@ -113,7 +128,7 @@ export function ComplexesPage() {
                 없음
               </p>
             ) : (
-              <ComplexTable rows={tracked} onToggle={(r) => mutation.mutate(r)} pendingNo={pendingNo} />
+              <ComplexTable rows={tracked} onToggle={(r) => mutation.mutate(r)} pendingNo={pendingNo} writable={writable} />
             )}
           </section>
 
@@ -122,7 +137,7 @@ export function ComplexesPage() {
               <h2 className="mb-2 text-base font-semibold text-muted-foreground">
                 추적 중단 ({untracked.length})
               </h2>
-              <ComplexTable rows={untracked} onToggle={(r) => mutation.mutate(r)} pendingNo={pendingNo} />
+              <ComplexTable rows={untracked} onToggle={(r) => mutation.mutate(r)} pendingNo={pendingNo} writable={writable} />
             </section>
           )}
         </>
