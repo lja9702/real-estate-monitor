@@ -40,9 +40,46 @@ function RowStatusBadge({ row }: { row: ComplexRow }) {
   return null
 }
 
+function ClusterCard({ row: r }: { row: ComplexRow }) {
+  return (
+    <div className={`rounded-lg border p-3 ${r.excluded ? 'opacity-50' : ''}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-1.5">
+            <span className="font-medium">{formatArea(r.area_excl)}</span>
+            <span className="text-sm text-muted-foreground">
+              {r.trade_ko}
+              {r.rent_min != null && ` /${formatManwon(r.rent_min)}`}
+            </span>
+            <RowStatusBadge row={r} />
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {[r.floor_info, r.direction].filter(Boolean).join(' · ')}
+            {` · 중개 ${r.realtor_count}곳`}
+          </div>
+        </div>
+        <span className="shrink-0 font-semibold tabular-nums">
+          {formatPriceRange(r.price_min, r.price_max)}
+        </span>
+      </div>
+      <div className="mt-2">
+        <MemoInput clusterKey={r.cluster_key} complexNo={r.complex_no} memo={r.memo} />
+      </div>
+    </div>
+  )
+}
+
 function ClusterTable({ rows }: { rows: ComplexRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <>
+    {/* 모바일: 카드 */}
+    <div className="space-y-2 md:hidden">
+      {rows.map((r) => (
+        <ClusterCard key={r.cluster_key} row={r} />
+      ))}
+    </div>
+    {/* 데스크탑: 테이블 */}
+    <div className="hidden overflow-x-auto rounded-lg border md:block">
       <Table>
         <TableHeader>
           <TableRow>
@@ -85,12 +122,39 @@ function ClusterTable({ rows }: { rows: ComplexRow[] }) {
         </TableBody>
       </Table>
     </div>
+    </>
   )
 }
 
 function DealTable({ deals }: { deals: DealRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <>
+    {/* 모바일: 카드 */}
+    <div className="space-y-2 md:hidden">
+      {deals.map((d) => (
+        <div
+          key={d.deal_key}
+          className={`flex items-baseline justify-between gap-2 rounded-lg border p-3 ${
+            d.cancelled ? 'opacity-50 line-through' : ''
+          }`}
+        >
+          <span className="text-sm text-muted-foreground">
+            {d.deal_date.replace(/-/g, '.')} · {d.trade_ko} · 전용 {formatArea(d.area_excl)}
+            {d.floor != null && ` · ${d.floor}층`}
+          </span>
+          <span className="shrink-0 font-semibold tabular-nums">
+            {formatManwon(d.price_deal)}
+            {d.price_rent != null && (
+              <span className="ml-1 text-xs font-normal text-muted-foreground">
+                /{formatManwon(d.price_rent)}
+              </span>
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
+    {/* 데스크탑: 테이블 */}
+    <div className="hidden overflow-x-auto rounded-lg border md:block">
       <Table>
         <TableHeader>
           <TableRow>
@@ -123,6 +187,86 @@ function DealTable({ deals }: { deals: DealRow[] }) {
         </TableBody>
       </Table>
     </div>
+    </>
+  )
+}
+
+function AuctionCard({
+  row: a,
+  past,
+  onOpen,
+}: {
+  row: AuctionRow
+  past?: boolean
+  onOpen: (key: string) => void
+}) {
+  return (
+    <div
+      onClick={() => onOpen(a.auction_key)}
+      className={`cursor-pointer rounded-lg border p-3 ${past ? 'opacity-60' : ''}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-sm tabular-nums">
+            {a.sale_date?.replace(/-/g, '.') ?? '-'}
+          </span>
+          {a.is_new && !past && (
+            <Badge variant="default" className="h-4 px-1 text-[10px]">신규</Badge>
+          )}
+          {a.outcome_label && (
+            <Badge
+              variant={a.outcome === 'sold' ? 'default' : 'secondary'}
+              className="h-4 px-1 text-[10px]"
+            >
+              {a.outcome === 'sold' && a.final_bid_manwon != null
+                ? `매각 ${formatManwon(a.final_bid_manwon)}`
+                : a.outcome_label}
+            </Badge>
+          )}
+        </div>
+        <span className="shrink-0 text-sm text-muted-foreground">
+          {a.fail_count > 0 ? `유찰 ${a.fail_count}회` : '신건'}
+        </span>
+      </div>
+      {a.flags.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1" title={a.remarks ?? undefined}>
+          {a.flags.map((f) => (
+            <Badge key={f} variant="destructive" className="h-4 px-1 text-[10px]">
+              {f}
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div className="mt-2 flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">감정 {formatManwon(a.appraisal_manwon)}</span>
+        <span className="font-semibold tabular-nums">
+          최저 {formatManwon(a.min_bid_manwon)}
+          {a.min_bid_ratio != null && (
+            <span
+              className={`ml-1 text-xs font-normal ${a.min_bid_ratio < 100 ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {a.min_bid_ratio}%
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="mt-1 truncate text-xs text-muted-foreground">
+        {a.court_url ? (
+          <a
+            href={a.court_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="hover:underline"
+          >
+            {a.case_no} ↗
+          </a>
+        ) : (
+          a.case_no
+        )}
+        {a.court_name && ` · ${a.court_name}`}
+      </div>
+    </div>
   )
 }
 
@@ -136,7 +280,15 @@ function AuctionTable({
   onOpen: (key: string) => void
 }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <>
+    {/* 모바일: 카드 */}
+    <div className="space-y-2 md:hidden">
+      {auctions.map((a) => (
+        <AuctionCard key={a.auction_key} row={a} past={past} onOpen={onOpen} />
+      ))}
+    </div>
+    {/* 데스크탑: 테이블 */}
+    <div className="hidden overflow-x-auto rounded-lg border md:block">
       <Table>
         <TableHeader>
           <TableRow>
@@ -227,6 +379,7 @@ function AuctionTable({
         </TableBody>
       </Table>
     </div>
+    </>
   )
 }
 

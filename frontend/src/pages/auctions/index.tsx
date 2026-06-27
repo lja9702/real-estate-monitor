@@ -3,7 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { auctionKeys, getAuctions } from '@/entities/auction/api/get-auctions'
 import { AUCTION_FILTER_DEFAULTS } from '@/entities/auction/model/types'
-import type { AuctionFilters } from '@/entities/auction/model/types'
+import type { AuctionFilters, AuctionRow } from '@/entities/auction/model/types'
 import { AuctionDetailDialog } from '@/entities/auction/ui/auction-detail-dialog'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { FilterBar } from '@/shared/ui/filter-bar'
 
 const SORT_OPTIONS = [
   { value: 'date_asc', label: '매각임박순' },
@@ -33,6 +34,92 @@ function parseFilters(sp: URLSearchParams): AuctionFilters {
     complex_no: sp.get('complex_no') ?? AUCTION_FILTER_DEFAULTS.complex_no,
     sort: sp.get('sort') ?? AUCTION_FILTER_DEFAULTS.sort,
   }
+}
+
+// 모바일 카드 — 좁은 화면에선 가로 스크롤 대신 한 건씩 카드로. 탭하면 상세 다이얼로그.
+function AuctionCard({ row: r, onOpen }: { row: AuctionRow; onOpen: () => void }) {
+  return (
+    <div onClick={onOpen} className="cursor-pointer rounded-lg border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-1.5">
+            <Link
+              to={`/complex/${r.complex_no}`}
+              onClick={(e) => e.stopPropagation()}
+              className="font-medium hover:underline"
+            >
+              {r.complex_name}
+            </Link>
+            {r.is_new && (
+              <Badge variant="default" className="h-4 px-1 text-[10px]">신규</Badge>
+            )}
+          </div>
+          {r.address_short && (
+            <div className="text-xs text-muted-foreground">{r.address_short}</div>
+          )}
+        </div>
+        <div className="shrink-0 text-right">
+          <div className="text-xs tabular-nums text-muted-foreground">
+            {r.sale_date?.replace(/-/g, '.') ?? '-'}
+          </div>
+          {r.outcome_label && (
+            <Badge
+              variant={r.outcome === 'sold' ? 'default' : 'secondary'}
+              className="mt-0.5 h-4 px-1 text-[10px]"
+            >
+              {r.outcome === 'sold' && r.final_bid_manwon != null
+                ? `매각 ${eok(r.final_bid_manwon)}`
+                : r.outcome_label}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {r.flags.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1" title={r.remarks ?? undefined}>
+          {r.flags.map((f) => (
+            <Badge key={f} variant="destructive" className="h-4 px-1 text-[10px]">
+              {f}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">감정 {eok(r.appraisal_manwon)}</span>
+        <span className="font-semibold tabular-nums">
+          최저 {eok(r.min_bid_manwon)}
+          {r.min_bid_ratio != null && (
+            <span
+              className={`ml-1 text-xs font-normal ${r.min_bid_ratio < 100 ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {r.min_bid_ratio}%
+            </span>
+          )}
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-center justify-between gap-2 text-sm text-muted-foreground">
+        <span>{r.fail_count > 0 ? `유찰 ${r.fail_count}회` : '신건'}</span>
+        <span className="truncate">
+          {r.court_url ? (
+            <a
+              href={r.court_url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="hover:underline"
+            >
+              {r.case_no} ↗
+            </a>
+          ) : (
+            r.case_no
+          )}
+          {r.court_name && ` · ${r.court_name}`}
+        </span>
+      </div>
+    </div>
+  )
 }
 
 export function AuctionsPage() {
@@ -62,8 +149,16 @@ export function AuctionsPage() {
 
   return (
     <div className="space-y-4">
-      {/* 상단 고정 필터 바 */}
-      <div className="sticky top-14 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      {/* 상단 고정 필터 바 — 모바일에선 접힘 */}
+      <FilterBar
+        count={
+          <>
+            총 <b className="text-foreground">{data?.total ?? 0}</b>건
+            {!!data?.new_count && <> · 신규 {data.new_count}건</>}
+            {query.isFetching && <> · …</>}
+          </>
+        }
+      >
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             구
@@ -111,15 +206,9 @@ export function AuctionsPage() {
             초기화
           </button>
         </div>
-        <div className="mt-2 flex items-center gap-3 border-t pt-2 text-sm text-muted-foreground">
-          <Link to="/" className="hover:underline">← 매물</Link>
-          <span>총 <b className="text-foreground">{data?.total ?? 0}</b>건</span>
-          {!!data?.new_count && <span>· 신규 {data.new_count}건</span>}
-          {query.isFetching && <span>· 불러오는 중…</span>}
-        </div>
-      </div>
+      </FilterBar>
 
-      {/* 테이블 */}
+      {/* 테이블(데스크탑) / 카드(모바일) */}
       {query.isError ? (
         <p className="rounded-lg border border-destructive/50 p-8 text-center text-sm text-destructive">
           불러오기 실패: {String(query.error)}
@@ -129,7 +218,15 @@ export function AuctionsPage() {
       ) : data.rows.length === 0 ? (
         <p className="rounded-lg border p-8 text-center text-muted-foreground">조건에 맞는 경매 물건이 없습니다.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <>
+        {/* 모바일: 카드 */}
+        <div className="space-y-2 md:hidden">
+          {data.rows.map((r) => (
+            <AuctionCard key={r.auction_key} row={r} onOpen={() => setDetailKey(r.auction_key)} />
+          ))}
+        </div>
+        {/* 데스크탑: 테이블 */}
+        <div className="hidden overflow-x-auto rounded-lg border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -224,6 +321,7 @@ export function AuctionsPage() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
       <AuctionDetailDialog auctionKey={detailKey} onClose={() => setDetailKey(null)} />
     </div>

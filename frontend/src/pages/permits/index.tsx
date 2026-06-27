@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { permitKeys, getPermits } from '@/entities/permit/api/get-permits'
 import { PERMIT_FILTER_DEFAULTS } from '@/entities/permit/model/types'
-import type { PermitFilters } from '@/entities/permit/model/types'
+import type { PermitFilters, PermitRow } from '@/entities/permit/model/types'
 import { Badge } from '@/components/ui/badge'
 import {
   Table,
@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { FilterBar } from '@/shared/ui/filter-bar'
 
 const MONTHS_OPTIONS = [
   { value: '1', label: '1개월' },
@@ -40,6 +41,42 @@ function parseFilters(sp: URLSearchParams): PermitFilters {
     job_gbn: sp.get('job_gbn') ?? PERMIT_FILTER_DEFAULTS.job_gbn,
     sort: sp.get('sort') ?? PERMIT_FILTER_DEFAULTS.sort,
   }
+}
+
+function jobVariant(job: string | null) {
+  return job === '허가' ? 'default' : job === '불허가' ? 'destructive' : 'secondary'
+}
+
+// 모바일 카드 — 좁은 화면에선 가로 스크롤 대신 한 건씩 카드로.
+function PermitCard({ row: r }: { row: PermitRow }) {
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-1.5">
+            <Link to={`/complex/${r.complex_no}`} className="font-medium hover:underline">
+              {r.complex_name}
+            </Link>
+            {r.is_new && (
+              <Badge variant="default" className="h-4 px-1 text-[10px]">신규</Badge>
+            )}
+          </div>
+          {r.address_short && (
+            <div className="text-xs text-muted-foreground">{r.address_short}</div>
+          )}
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {r.permit_date?.replace(/-/g, '.') ?? '-'}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center gap-2 text-sm">
+        <Badge variant={jobVariant(r.job_gbn)} className="h-5 px-1.5 text-[10px]">
+          {r.job_gbn ?? '-'}
+        </Badge>
+        <span className="text-muted-foreground">{r.use_purp ?? '-'}</span>
+      </div>
+    </div>
+  )
 }
 
 export function PermitsPage() {
@@ -71,8 +108,16 @@ export function PermitsPage() {
 
   return (
     <div className="space-y-4">
-      {/* 상단 고정 필터 바 */}
-      <div className="sticky top-14 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      {/* 상단 고정 필터 바 — 모바일에선 접힘 */}
+      <FilterBar
+        count={
+          <>
+            총 <b className="text-foreground">{data?.total ?? 0}</b>건
+            {!!data?.new_count && <> · 신규 {data.new_count}건</>}
+            {query.isFetching && <> · …</>}
+          </>
+        }
+      >
         <div className="flex flex-wrap items-end gap-2">
           {/* 구 */}
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -149,15 +194,9 @@ export function PermitsPage() {
             초기화
           </button>
         </div>
-        <div className="mt-2 flex items-center gap-3 border-t pt-2 text-sm text-muted-foreground">
-          <Link to="/" className="hover:underline">← 매물</Link>
-          <span>총 <b className="text-foreground">{data?.total ?? 0}</b>건</span>
-          {!!data?.new_count && <span>· 신규 {data.new_count}건</span>}
-          {query.isFetching && <span>· 불러오는 중…</span>}
-        </div>
-      </div>
+      </FilterBar>
 
-      {/* 테이블 */}
+      {/* 테이블(데스크탑) / 카드(모바일) */}
       {query.isError ? (
         <p className="rounded-lg border border-destructive/50 p-8 text-center text-sm text-destructive">
           불러오기 실패: {String(query.error)}
@@ -167,7 +206,15 @@ export function PermitsPage() {
       ) : data.rows.length === 0 ? (
         <p className="rounded-lg border p-8 text-center text-muted-foreground">조건에 맞는 허가 내역이 없습니다.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <>
+        {/* 모바일: 카드 */}
+        <div className="space-y-2 md:hidden">
+          {data.rows.map((r) => (
+            <PermitCard key={r.permit_key} row={r} />
+          ))}
+        </div>
+        {/* 데스크탑: 테이블 */}
+        <div className="hidden overflow-x-auto rounded-lg border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -208,6 +255,7 @@ export function PermitsPage() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
     </div>
   )

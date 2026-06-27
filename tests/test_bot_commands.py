@@ -87,6 +87,55 @@ def test_list_only_subscribed(engine, tmp_path):
     assert "없습니다" in handle_text("/list", _ctx_chat(engine, tmp_path, "999"))
 
 
+# ── /untrack — 본인 구독만 제거(번호·이름) ───────────────────────────────────
+def test_untrack_empty_arg_shows_usage(engine, tmp_path):
+    assert "번호 또는 이름" in handle_text("/untrack", _ctx_chat(engine, tmp_path))
+
+
+def test_untrack_by_number(engine, tmp_path):
+    with get_session(engine) as s:
+        repo.upsert_complex(s, "947", name="삼호1차", source=SOURCE_TELEGRAM, is_active=True)
+        repo.add_subscription(s, "555", "947")
+    msg = handle_text("/untrack 947", _ctx_chat(engine, tmp_path, "555"))
+    assert "추적 중단" in msg and "삼호1차" in msg
+    assert "없습니다" in handle_text("/list", _ctx_chat(engine, tmp_path, "555"))  # 구독 제거됨
+
+
+def test_untrack_by_name(engine, tmp_path):
+    with get_session(engine) as s:
+        repo.upsert_complex(s, "947", name="방배 삼호1차", source=SOURCE_TELEGRAM, is_active=True)
+        repo.add_subscription(s, "555", "947")
+    assert "추적 중단" in handle_text("/untrack 삼호", _ctx_chat(engine, tmp_path, "555"))
+
+
+def test_untrack_not_subscribed(engine, tmp_path):
+    assert "추적 중인 단지가 아니" in handle_text("/untrack 999", _ctx_chat(engine, tmp_path, "555"))
+
+
+def test_untrack_ambiguous_name_asks_number(engine, tmp_path):
+    with get_session(engine) as s:
+        repo.upsert_complex(s, "1", name="래미안 A", source=SOURCE_TELEGRAM, is_active=True)
+        repo.upsert_complex(s, "2", name="래미안 B", source=SOURCE_TELEGRAM, is_active=True)
+        repo.add_subscription(s, "555", "1")
+        repo.add_subscription(s, "555", "2")
+    assert "번호로 지정" in handle_text("/untrack 래미안", _ctx_chat(engine, tmp_path, "555"))
+
+
+def test_untrack_only_removes_caller(engine, tmp_path):
+    """A 가 untrack 해도 B 의 구독·전역 추적(Complex.is_active)엔 영향 없음."""
+    from myhouse.db.models import Complex
+
+    with get_session(engine) as s:
+        repo.upsert_complex(s, "947", name="삼호1차", source=SOURCE_TELEGRAM, is_active=True)
+        repo.add_subscription(s, "A", "947")
+        repo.add_subscription(s, "B", "947")
+    handle_text("/untrack 947", _ctx_chat(engine, tmp_path, "A"))
+    assert "없습니다" in handle_text("/list", _ctx_chat(engine, tmp_path, "A"))  # A 빠짐
+    assert "삼호1차" in handle_text("/list", _ctx_chat(engine, tmp_path, "B"))  # B 유지
+    with get_session(engine) as s:
+        assert s.get(Complex, "947").is_active is True  # 전역 추적 유지
+
+
 def test_add_empty_arg_shows_usage(engine, tmp_path):
     # 비숫자 인자는 이제 주소/단지명 검색으로 처리되므로(test_search.py), 빈 인자만 사용법 안내
     assert "단지번호" in handle_text("/add", _ctx(engine, tmp_path))

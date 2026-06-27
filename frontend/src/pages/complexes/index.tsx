@@ -30,7 +30,43 @@ function ComplexTable({
   writable: boolean
 }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <>
+    {/* 모바일: 카드 */}
+    <div className="space-y-2 md:hidden">
+      {rows.map((r) => (
+        <div key={r.complex_no} className="rounded-lg border p-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <Link to={`/complex/${r.complex_no}`} className="font-medium hover:underline">
+                {r.name}
+              </Link>
+              {(r.address_short || r.meta_line) && (
+                <div className="text-xs text-muted-foreground">
+                  {[r.address_short, r.meta_line].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+            {writable && (
+              <Button
+                size="sm"
+                variant={r.is_active ? 'outline' : 'default'}
+                disabled={pendingNo === r.complex_no}
+                onClick={() => onToggle(r)}
+                className="h-7 shrink-0 text-xs"
+              >
+                {pendingNo === r.complex_no ? '…' : r.is_active ? '추적 중단' : '추적 재개'}
+              </Button>
+            )}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground">
+            <span>{r.source_ko}</span>
+            <span className="tabular-nums">활성 매물 {r.active_count}건</span>
+          </div>
+        </div>
+      ))}
+    </div>
+    {/* 데스크탑: 테이블 */}
+    <div className="hidden overflow-x-auto rounded-lg border md:block">
       <Table>
         <TableHeader>
           <TableRow>
@@ -73,6 +109,7 @@ function ComplexTable({
         </TableBody>
       </Table>
     </div>
+    </>
   )
 }
 
@@ -107,9 +144,11 @@ export function ComplexesPage() {
 
       {!writable && (
         <p className="rounded-lg border bg-muted/40 p-3 text-sm text-muted-foreground">
-          추적 단지 변경은 운영자만 할 수 있어요.{' '}
-          <span className="font-medium text-foreground">추적 중단</span>이 필요하면 텔레그램 봇으로
-          개별 요청해 주세요.
+          추적 중단은 텔레그램 봇에서{' '}
+          <code className="rounded bg-muted px-1 text-foreground">/untrack 단지번호</code> 또는{' '}
+          <code className="rounded bg-muted px-1 text-foreground">/untrack 단지명</code> 으로 할 수
+          있어요. <code className="rounded bg-muted px-1 text-foreground">/list</code> 로 목록을
+          확인하세요.
         </p>
       )}
 

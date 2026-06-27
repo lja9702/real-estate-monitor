@@ -13,7 +13,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatArea, formatManwon } from '@/shared/lib/format'
+import { FilterBar } from '@/shared/ui/filter-bar'
 import { TRADE_TYPES } from '@/shared/config/constants'
+import type { FlashRow } from '@/entities/flash/model/types'
 
 const DAYS_OPTIONS = [
   { value: '7', label: '7일' },
@@ -49,6 +51,75 @@ function parseFilters(sp: URLSearchParams): FlashFilters {
   }
 }
 
+// 모바일 카드 — 좁은 화면에선 가로 스크롤 대신 한 건씩 카드로.
+function FlashCard({ row: r }: { row: FlashRow }) {
+  const gone = r.status !== 'ACTIVE'
+  return (
+    <div className={`rounded-lg border p-3 ${gone ? 'opacity-50' : ''}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-1.5">
+            <Link to={`/complex/${r.complex_no}`} className="font-medium hover:underline">
+              {r.complex_name}
+            </Link>
+            {r.article_url && (
+              <a
+                href={r.article_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+              >
+                네이버↗
+              </a>
+            )}
+          </div>
+          {r.address_short && (
+            <div className="text-xs text-muted-foreground">{r.address_short}</div>
+          )}
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {r.detected_at.slice(0, 10).replace(/-/g, '.')}
+        </span>
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {r.dup_count > 1 && (
+          <Badge variant="outline" className="h-4 px-1 text-[10px]">
+            외 {r.dup_count - 1}건
+          </Badge>
+        )}
+        {r.is_new && (
+          <Badge variant="default" className="h-4 px-1 text-[10px]">신규감지</Badge>
+        )}
+        <Badge
+          variant={r.trigger === 'price_drop' ? 'secondary' : 'outline'}
+          className="h-4 px-1 text-[10px]"
+        >
+          {r.trigger_ko}
+        </Badge>
+        {gone && <Badge variant="outline" className="h-4 px-1 text-[10px]">빠짐</Badge>}
+      </div>
+
+      <div className="mt-2 flex items-baseline justify-between gap-2">
+        <span className="text-sm text-muted-foreground">
+          {r.trade_ko} · 전용 {formatArea(r.area_excl)}
+          {r.floor_info && ` · ${r.floor_info.split('/')[0]}층`}
+        </span>
+        <span className="font-semibold tabular-nums">{formatManwon(r.price_deal)}</span>
+      </div>
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">
+          직전 하한 {formatManwon(r.prior_floor)}
+        </span>
+        <span className="font-semibold tabular-nums text-destructive">
+          ▼{formatManwon(r.drop_amount)} (-{r.drop_pct}%)
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function FlashPage() {
   const [sp, setSp] = useSearchParams()
   const filters = parseFilters(sp)
@@ -81,8 +152,16 @@ export function FlashPage() {
 
   return (
     <div className="space-y-4">
-      {/* 상단 고정 필터 바 */}
-      <div className="sticky top-14 z-20 -mx-4 border-b bg-background/95 px-4 pt-3 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/75">
+      {/* 상단 고정 필터 바 — 모바일에선 접힘 */}
+      <FilterBar
+        count={
+          <>
+            총 <b className="text-foreground">{data?.total ?? 0}</b>건
+            {!!data?.new_count && <> · 신규 {data.new_count}건</>}
+            {query.isFetching && <> · …</>}
+          </>
+        }
+      >
         <div className="flex flex-wrap items-end gap-2">
           {/* 거래유형 */}
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -197,15 +276,9 @@ export function FlashPage() {
             초기화
           </button>
         </div>
-        <div className="mt-2 flex items-center gap-3 border-t pt-2 text-sm text-muted-foreground">
-          <Link to="/" className="hover:underline">← 매물</Link>
-          <span>총 <b className="text-foreground">{data?.total ?? 0}</b>건</span>
-          {!!data?.new_count && <span>· 신규 {data.new_count}건</span>}
-          {query.isFetching && <span>· 불러오는 중…</span>}
-        </div>
-      </div>
+      </FilterBar>
 
-      {/* 테이블 */}
+      {/* 테이블(데스크탑) / 카드(모바일) */}
       {query.isError ? (
         <p className="rounded-lg border border-destructive/50 p-8 text-center text-sm text-destructive">
           불러오기 실패: {String(query.error)}
@@ -217,7 +290,15 @@ export function FlashPage() {
           조건에 맞는 급매가 없습니다. (매물 수집이 누적되면 채워집니다)
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <>
+        {/* 모바일: 카드 */}
+        <div className="space-y-2 md:hidden">
+          {data.rows.map((r) => (
+            <FlashCard key={r.article_no} row={r} />
+          ))}
+        </div>
+        {/* 데스크탑: 테이블 */}
+        <div className="hidden overflow-x-auto rounded-lg border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -297,6 +378,7 @@ export function FlashPage() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
     </div>
   )

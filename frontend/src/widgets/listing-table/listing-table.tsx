@@ -38,9 +38,82 @@ function DealCell({ row }: { row: ListingRow }) {
   )
 }
 
+// 모바일 카드 — 좁은 화면에선 가로 스크롤 대신 한 건씩 카드로 본다.
+function ListingCard({ row: r }: { row: ListingRow }) {
+  return (
+    <div className={`rounded-lg border p-3 ${r.excluded ? 'opacity-50' : ''}`}>
+      <div className="flex items-start gap-2">
+        <StarButton complexNo={r.complex_no} starred={r.starred} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <Link
+              to={`/complex/${r.complex_no}`}
+              className="truncate font-medium hover:underline"
+            >
+              {r.complex_name}
+            </Link>
+            {r.is_new && (
+              <Badge variant="default" className="h-5 shrink-0 px-1.5 text-[10px]">
+                신규
+              </Badge>
+            )}
+            {r.rep_article_url && (
+              <a
+                href={r.rep_article_url}
+                target="_blank"
+                rel="noreferrer"
+                className="ml-auto shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline"
+              >
+                네이버↗
+              </a>
+            )}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            {[r.address_short, r.meta_line].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-2 flex items-baseline justify-between gap-2">
+        <span className="text-sm text-muted-foreground">
+          {r.trade_ko} · 전용 {formatArea(r.area_excl)}
+          {r.rent_min != null && (
+            <span className="ml-1">/{formatManwon(r.rent_min)}</span>
+          )}
+        </span>
+        <span className="text-right font-semibold tabular-nums">
+          {formatPriceRange(r.price_min, r.price_max)}
+        </span>
+      </div>
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">실거래</span>
+        <DealCell row={r} />
+      </div>
+
+      <div className="mt-2">
+        <MemoInput
+          clusterKey={r.rep_cluster_key}
+          complexNo={r.complex_no}
+          memo={r.memo}
+        />
+      </div>
+    </div>
+  )
+}
+
 export function ListingTable({ rows }: { rows: ListingRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <>
+      {/* 모바일: 카드 목록 */}
+      <div className="space-y-2 md:hidden">
+        {rows.map((r) => (
+          <ListingCard key={r.rep_cluster_key} row={r} />
+        ))}
+      </div>
+
+      {/* 데스크탑: 전체폭 테이블 */}
+      <div className="hidden overflow-x-auto rounded-lg border md:block">
       <Table>
         <TableHeader>
           <TableRow>
@@ -113,6 +186,7 @@ export function ListingTable({ rows }: { rows: ListingRow[] }) {
           ))}
         </TableBody>
       </Table>
-    </div>
+      </div>
+    </>
   )
 }

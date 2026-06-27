@@ -139,3 +139,39 @@ def test_digest_flash_hidden_when_off():
     assert msg is not None
     assert "🔥" not in msg         # 섹션·카운트 모두 숨김
     assert "🆕" in msg             # 신규는 그대로
+
+
+def test_digest_flash_kept_outside_band():
+    # 급매(11억)가 밴드(15~26억) 밖이어도 항상 표시 + 그 신규는 신규 섹션에도 남음(급매 우회).
+    msg = build_digest(_run_result_with_flash(), "http://localhost:8765",
+                       price_min=150000, price_max=260000, drop_empty=True)
+    assert msg is not None
+    assert "🔥 급매" in msg and "🔥급매 1" in msg
+    assert "🆕" in msg and "신규 1" in msg  # 밴드 밖 급매 신규도 신규 섹션 표시
+
+
+# ── 빈 단지(was_empty) 첫 매물 — 밴드 우회 ──────────────────────────────────────
+def _run_result_empty_complex(*, was_empty: bool) -> RunResult:
+    d = make_dto("9", price_deal=50000)  # 5억 신규 — 밴드(15~26억) 밖
+    cdiff = ComplexDiff("111", True, [DiffOp(NEW, "9", d.cluster_key, dto=d)])
+    cr = ComplexResult(
+        complex_no="111", label="테스트단지", name="한솔마을주공5단지",
+        diff=cdiff, fetch=FetchResult("111", [], complete=True), was_empty=was_empty,
+    )
+    return RunResult(run_id=1, started_at=now_kst(), status=RunStatus.SUCCESS,
+                     complexes=[cr], new_count=1)
+
+
+def test_digest_band_keeps_new_in_empty_complex():
+    # 빈 단지에 처음 뜬 5억 신규는 밴드(15~26억) 밖이어도 표시.
+    msg = build_digest(_run_result_empty_complex(was_empty=True), "http://localhost:8765",
+                       price_min=150000, price_max=260000, drop_empty=True)
+    assert msg is not None
+    assert "🆕" in msg and "신규 1" in msg
+
+
+def test_digest_band_drops_new_in_nonempty_complex():
+    # 같은 5억 신규라도 빈 단지가 아니면(was_empty=False) 밴드 밖은 제외(기존 동작 유지).
+    msg = build_digest(_run_result_empty_complex(was_empty=False), "http://localhost:8765",
+                       price_min=150000, price_max=260000, drop_empty=True)
+    assert msg is None

@@ -46,6 +46,41 @@ function duration(row: RunRow) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60}s`
 }
 
+// 모바일 카드 — 11열 테이블은 좁은 화면에서 못 보므로 핵심만 카드로.
+function RunCard({ row: r }: { row: RunRow }) {
+  return (
+    <div className={`rounded-lg border p-3 ${r.error ? 'bg-destructive/5' : ''}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5">
+          <span className="font-medium">{KIND_KO[r.kind] ?? r.kind}</span>
+          <Badge variant={STATUS_VARIANT[r.status] ?? 'outline'} className="h-4 px-1 text-[10px]">
+            {STATUS_KO[r.status] ?? r.status}
+          </Badge>
+          <span className="text-xs text-muted-foreground">
+            #{r.id} · {r.trigger}
+          </span>
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{duration(r)}</span>
+      </div>
+      <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+        {formatDt(r.started_at)}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-sm tabular-nums">
+        <span className="text-muted-foreground">대상 <b className="text-foreground">{r.targets_count}</b></span>
+        <span className="text-muted-foreground">수집 <b className="text-foreground">{r.articles_fetched}</b></span>
+        <span className="text-muted-foreground">신규 <b className="text-foreground">{r.new_count}</b></span>
+        <span className="text-muted-foreground">삭제 <b className="text-foreground">{r.removed_count}</b></span>
+        <span className="text-muted-foreground">
+          오류{' '}
+          <b className={r.http_errors > 0 ? 'text-destructive' : 'text-foreground'}>
+            {r.http_errors}
+          </b>
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function RunsPage() {
   const query = useQuery({ queryKey: runKeys.all, queryFn: getRuns })
 
@@ -68,7 +103,15 @@ export function RunsPage() {
       ) : !query.data ? (
         <p className="rounded-lg border p-8 text-center text-muted-foreground">불러오는 중…</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
+        <>
+        {/* 모바일: 카드 */}
+        <div className="space-y-2 md:hidden">
+          {query.data.runs.map((r) => (
+            <RunCard key={r.id} row={r} />
+          ))}
+        </div>
+        {/* 데스크탑: 테이블 */}
+        <div className="hidden overflow-x-auto rounded-lg border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -118,6 +161,7 @@ export function RunsPage() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
     </div>
   )

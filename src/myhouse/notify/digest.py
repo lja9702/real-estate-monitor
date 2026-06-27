@@ -112,8 +112,12 @@ def _complex_block(
     include_errors: bool,
     show_flash: bool = True,
 ) -> tuple[list[str], int, int, int, int]:
-    """(라인, 신규수, 가격변동수, 거래완료수, 급매수) — 가격밴드 밖 매물은 제외.
+    """(라인, 신규수, 가격변동수, 거래완료수, 급매수).
 
+    가격밴드는 '일반 신규'·가격변동·거래완료에만 적용한다. 다음은 밴드를 우회해 항상 알린다:
+      - 🔥급매(flash) — 가격 무관 항상 표기.
+      - 빈 단지(was_empty=직전 매물 0건)에 처음 뜬 신규 — 가격 무관 항상 표기.
+      - 급매에 해당하는 신규 — 가격 무관 항상 표기.
     카운트는 (헤더 표기를 위해) 매물(article) 단위다. 신규는 표시할 때만 cluster 로 접는다.
     급매(🔥)는 신규/가격변동의 부분집합이라 별도 섹션으로 한 번 더 강조한다(하한가·하락폭 표기).
     """
@@ -125,7 +129,20 @@ def _complex_block(
     if cdiff is None:
         return ([], 0, 0, 0, 0)
 
-    new_dtos = [op.dto for op in cdiff.new if op.dto and in_band(op.dto.price_deal, price_min, price_max)]
+    # 급매(🔥)는 가격밴드와 무관하게 항상 알림 — 밴드는 '일반 신규'에만 적용한다.
+    flash_sigs = list(cr.flash) if show_flash else []
+    flash_article_nos = {s.article_no for s in flash_sigs}
+    # 신규: 밴드 안이거나 / 급매이거나 / 빈 단지(직전 매물 0건)에 처음 뜬 매물이면 표시(급매·빈단지는 밴드 우회).
+    new_dtos = [
+        op.dto
+        for op in cdiff.new
+        if op.dto
+        and (
+            in_band(op.dto.price_deal, price_min, price_max)
+            or cr.was_empty
+            or op.article_no in flash_article_nos
+        )
+    ]
     # 가격변동은 신·구 어느 쪽이든 밴드에 걸치면 표시(밴드 진입/이탈도 의미 있음).
     price_ops = [
         op
@@ -137,10 +154,6 @@ def _complex_block(
         )
     ]
     removed_ops = [op for op in cdiff.removed if in_band(op.old_price_deal, price_min, price_max)]
-    flash_sigs = (
-        [s for s in cr.flash if in_band(s.price_deal, price_min, price_max)]
-        if show_flash else []
-    )
 
     if not (new_dtos or price_ops or removed_ops or flash_sigs):
         return ([], 0, 0, 0, 0)

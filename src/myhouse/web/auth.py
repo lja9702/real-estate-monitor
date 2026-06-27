@@ -114,7 +114,7 @@ def gate_page(next_path: str = "/", error: bool = False) -> str:
   <form class="card" method="post" action="/gate">
     <h1>🏠 myhouse</h1>
     <p class="sub">초대코드를 입력하면 들어갈 수 있어요.</p>
-    <input name="code" type="password" placeholder="초대코드" autofocus autocomplete="off" required>
+    <input name="code" type="text" placeholder="초대코드" autofocus autocomplete="off" required>
     <input type="hidden" name="next" value="{nxt}">
     <button type="submit">입장</button>
     {err}

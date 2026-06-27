@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { MenuIcon, XIcon } from 'lucide-react'
 import { apiPostForm } from '@/shared/api/client'
 import { useMe, canWrite } from '@/shared/api/session'
 
@@ -115,11 +116,22 @@ function RunButton({ label, endpoint, kind }: { label: string; endpoint: string;
   )
 }
 
+function navLinkClass({ isActive }: { isActive: boolean }) {
+  return `whitespace-nowrap rounded px-2.5 py-1 text-sm transition-colors ${
+    isActive
+      ? 'bg-primary text-primary-foreground'
+      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+  }`
+}
+
 export function RootLayout() {
   const me = useMe()
   // 수집 버튼은 쓰기 가능한 서버(readonly 아님) + 운영자(admin)/로컬에서만 노출.
   // 클라우드(읽기전용)에선 전원 숨김, 지인(member)에게도 숨김.
   const canCollect = canWrite(me.data)
+
+  // 모바일 햄버거 메뉴 — 링크를 누르면(=라우트 이동) 닫는다.
+  const [menuOpen, setMenuOpen] = useState(false)
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -133,36 +145,69 @@ export function RootLayout() {
             myhouse
           </Link>
 
-          {/* 페이지 네비 */}
-          <nav className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+          {/* 페이지 네비 — 데스크탑(md+)에서만 가로 배치 */}
+          <nav className="hidden min-w-0 items-center gap-0.5 overflow-x-auto md:flex">
             {NAV_LINKS.map(({ to, label, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                className={({ isActive }) =>
-                  `whitespace-nowrap rounded px-2.5 py-1 text-sm transition-colors ${
-                    isActive
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  }`
-                }
-              >
+              <NavLink key={to} to={to} end={end} className={navLinkClass}>
                 {label}
               </NavLink>
             ))}
           </nav>
 
-          {/* 수집 버튼 — 운영자(admin)/로컬 + 쓰기 가능 서버에서만 노출 */}
+          {/* 수집 버튼 — 운영자(admin)/로컬 + 쓰기 가능 서버에서만, 데스크탑에서만 가로 노출 */}
           {canCollect && (
-            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <div className="ml-auto hidden shrink-0 items-center gap-1.5 md:flex">
               <RunButton label="지금 수집" endpoint="/run" kind="listings" />
               <RunButton label="실거래 수집" endpoint="/run-deals" kind="deals" />
               <RunButton label="허가 수집" endpoint="/run-permits" kind="permits" />
               <RunButton label="경매 수집" endpoint="/run-auctions" kind="auctions" />
             </div>
           )}
+
+          {/* 모바일 햄버거 — md 미만에서만 노출 */}
+          <button
+            type="button"
+            aria-label={menuOpen ? '메뉴 닫기' : '메뉴 열기'}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+            className="ml-auto inline-flex size-9 items-center justify-center rounded-md border text-muted-foreground hover:bg-muted md:hidden"
+          >
+            {menuOpen ? <XIcon className="size-5" /> : <MenuIcon className="size-5" />}
+          </button>
         </div>
+
+        {/* 모바일 드롭다운 메뉴 */}
+        {menuOpen && (
+          <div className="border-t bg-background md:hidden">
+            <nav className="mx-auto grid w-full max-w-7xl grid-cols-2 gap-1 px-4 py-3">
+              {NAV_LINKS.map(({ to, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  onClick={() => setMenuOpen(false)}
+                  className={({ isActive }) =>
+                    `rounded px-3 py-2.5 text-sm transition-colors ${
+                      isActive
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-foreground hover:bg-muted'
+                    }`
+                  }
+                >
+                  {label}
+                </NavLink>
+              ))}
+            </nav>
+            {canCollect && (
+              <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-1.5 border-t px-4 py-3">
+                <RunButton label="지금 수집" endpoint="/run" kind="listings" />
+                <RunButton label="실거래 수집" endpoint="/run-deals" kind="deals" />
+                <RunButton label="허가 수집" endpoint="/run-permits" kind="permits" />
+                <RunButton label="경매 수집" endpoint="/run-auctions" kind="auctions" />
+              </div>
+            )}
+          </div>
+        )}
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">

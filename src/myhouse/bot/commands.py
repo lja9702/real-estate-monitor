@@ -34,7 +34,7 @@ from ..web.queries import (
 
 log = logging.getLogger(__name__)
 
-KNOWN = {"help", "start", "stop", "add", "check", "deals", "permits", "list", "discover", "band", "join", "as"}
+KNOWN = {"help", "start", "stop", "add", "untrack", "check", "deals", "permits", "list", "discover", "band", "join", "as"}
 LOCKED_MSG = "⏳ 지금 정기 수집이 진행 중입니다. 잠시 후 다시 시도하세요."
 JOIN_GATE_HINT = (
     "🔒 초대받은 사람만 쓸 수 있는 봇이에요.\n"
@@ -117,6 +117,8 @@ def handle_text(text: str, ctx: BotContext) -> str:
             return _handle_list(ctx)
         if cmd == "add":
             return _handle_add(arg, ctx)
+        if cmd == "untrack":
+            return _handle_untrack(arg, ctx)
         if cmd == "check":
             return _handle_check(arg, ctx)
         if cmd == "deals":
@@ -174,7 +176,8 @@ _BAND_USAGE = (
     "• <code>/band 15</code> — 15억 이상\n"
     "• <code>/band 0 12</code> — 12억 이하\n"
     "• <code>/band off</code> — 전체(밴드 해제)\n"
-    "• <code>/band</code> — 현재 밴드 보기"
+    "• <code>/band</code> — 현재 밴드 보기\n"
+    "<i>※ 🔥급매와 '빈 단지에 처음 뜬 매물'은 밴드와 무관하게 항상 받습니다.</i>"
 )
 
 
@@ -237,7 +240,8 @@ def _handle_band(arg: str, ctx: BotContext) -> str:
         return "✅ 가격밴드 <b>해제</b> — 이제 전체 가격대 알림을 받습니다."
     return (
         f"✅ 가격밴드 설정: <b>{label}</b>\n"
-        "이 가격대의 매물·실거래·신규단지만 정기 알림으로 받습니다."
+        "이 가격대의 매물·실거래·신규단지만 정기 알림으로 받습니다.\n"
+        "<i>※ 🔥급매와 '빈 단지에 처음 뜬 매물'은 밴드와 무관하게 항상 받습니다.</i>"
     )
 
 
@@ -331,6 +335,64 @@ def _handle_add(arg: str, ctx: BotContext) -> str:
             ctx.progress(f"⏳ '{h.name}'({h.complex_no}) 추가 + 첫 매물 수집 중…")
             return _do_add(h.complex_no, h.name, client, ctx)
         return reply.format_add_candidates(keyword, hits)
+
+
+def _match_subscription(subs: list[Complex], q: str) -> tuple[Complex | None, list[Complex]]:
+    """본인 구독 단지에서 번호/이름으로 매칭. 반환 (단일 매치 | None, 다중후보).
+
+    번호(숫자)는 정확히 일치, 이름은 부분일치(대소문자 무시). 정확히 1건이면 단일,
+    0건·다수면 후보 리스트(다수면 사용자에게 번호로 다시 고르게 한다).
+    """
+    if q.isdigit():
+        exact = [c for c in subs if c.complex_no == q]
+        return (exact[0] if exact else None), []
+    ql = q.lower()
+    hits = [c for c in subs if ql in (c.name or "").lower()]
+    if len(hits) == 1:
+        return hits[0], []
+    return None, hits
+
+
+def _handle_untrack(arg: str, ctx: BotContext) -> str:
+    """본인 구독에서 단지 1개 제거 — 번호 또는 이름. 다른 사람·전역 추적엔 영향 없음.
+
+    추적 단지는 이미 DB 에 있으므로 본인 구독 목록에서 로컬로만 해석한다(브라우저/네이버 불필요).
+    """
+    from ..db.repo import list_subscribed_complexes, remove_subscription
+
+    q = arg.strip()
+    if not q:
+        return (
+            "추적 중단할 단지의 <b>번호 또는 이름</b>을 보내세요.\n"
+            "예: <code>/untrack 1234</code> · <code>/untrack 방배 삼호1차</code>\n"
+            "<code>/list</code> 로 현재 추적 단지를 볼 수 있어요."
+        )
+    if not ctx.chat_id:
+        return "⚠ 추적 중단에 실패했습니다."
+    with get_session(ctx.engine) as session:
+        subs = list_subscribed_complexes(session, ctx.chat_id)
+        match, candidates = _match_subscription(subs, q)
+        if match is None:
+            if candidates:
+                lines = "\n".join(
+                    f"• <code>/untrack {escape(c.complex_no)}</code> — {escape(c.name or c.complex_no)}"
+                    for c in sorted(candidates, key=lambda c: c.name or "")
+                )
+                return f"'<b>{escape(q)}</b>' 로 여러 단지가 잡혔어요. 번호로 지정해 주세요:\n{lines}"
+            return (
+                f"'<b>{escape(q)}</b>' 는 추적 중인 단지가 아니에요.\n"
+                "<code>/list</code> 로 현재 추적 단지를 확인하세요."
+            )
+        # 세션이 열려 있을 때 값을 확보(commit 이 ORM 인스턴스를 expire/detach 시키므로).
+        no = match.complex_no
+        name = escape(match.name or no)
+        removed = remove_subscription(session, ctx.chat_id, no)
+    if not removed:
+        return f"'{name}' 는 추적 중이 아니었어요."
+    return (
+        f"🚫 추적 중단: <b>{name}</b>(<code>{escape(no)}</code>)\n"
+        "이제 이 단지 알림을 받지 않아요. 다시 받으려면 <code>/add</code> 로 추가하세요."
+    )
 
 
 def _resolve_local(q: str, ctx: BotContext) -> tuple[str | None, str | None, bool]:

@@ -154,6 +154,7 @@ class ComplexResult:
     diff: ComplexDiff | None = None
     fetch: FetchResult | None = None
     flash: list[FlashSignal] = field(default_factory=list)
+    was_empty: bool = False  # 수집 직전 활성 매물 0건(빈 단지) — 첫 매물 등장은 밴드 무관 알림
     error: str | None = None
 
 
@@ -349,6 +350,10 @@ def _collect_one(
     existing_rows = repo.get_listings_for_complex(session, cx.complex_no)
     by_id = {r.article_no: r for r in existing_rows}
     states = {aid: _to_state(r) for aid, r in by_id.items()}
+    # 수집 직전 '보이는' 매물(ACTIVE/PENDING_REMOVAL)이 0건이면 빈 단지 — 첫 매물 등장은 밴드 무관 알림.
+    was_empty = not any(
+        r.status in (ListingStatus.ACTIVE, ListingStatus.PENDING_REMOVAL) for r in existing_rows
+    )
 
     cdiff = diff_complex(
         cx.complex_no,
@@ -392,7 +397,8 @@ def _collect_one(
         "" if fetch.complete else " · ⚠수집불완전(삭제판정 생략)",
     )
     return ComplexResult(
-        cx.complex_no, label, cx.name, address=cx.address, diff=cdiff, fetch=fetch, flash=flash_signals
+        cx.complex_no, label, cx.name, address=cx.address, diff=cdiff, fetch=fetch,
+        flash=flash_signals, was_empty=was_empty,
     )
 
 
