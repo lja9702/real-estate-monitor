@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from .endpoints import NEW_LAND_BASE, USER_AGENT
 from .errors import NaverApiError
@@ -92,23 +93,50 @@ class NaverBrowser:
         log.info("new.land 토큰 캡처 완료")
         return self._token
 
-    def fetch_json(self, url: str, referer: str) -> dict:
-        """브라우저 컨텍스트로 GET(JSON). 토큰 자동 첨부."""
+    def fetch_json(self, url: str, referer: str, *, retries: int = 2) -> dict:
+        """브라우저 컨텍스트로 GET(JSON). 토큰 자동 첨부.
+
+        playwright 의 일시적 네트워크 오류(read ETIMEDOUT·ECONNRESET 등)는 짧은
+        백오프로 재시도하고, 끝내 실패하면 NaverApiError 로 변환한다. 이렇게 해야
+        호출측(fetch_articles → _collect_one)이 단지 단위로 격리(complete=False·PARTIAL)
+        할 수 있다 — raw playwright Error 가 그대로 새어 나가면 919단지 배치가 통째로 죽는다.
+        """
+        from playwright.sync_api import Error as PlaywrightError
+
         if self._ctx is None or not self._token:
             raise NaverApiError("토큰 미발급 — ensure_token 먼저 호출하세요")
-        resp = self._ctx.request.get(
-            url,
-            headers={
-                "authorization": self._token,
-                "referer": referer,
-                "accept": "application/json, text/plain, */*",
-                "accept-language": "ko-KR,ko;q=0.9",
-            },
-            timeout=self.nav_timeout,
-        )
-        if resp.status != 200:
-            raise NaverApiError(f"HTTP {resp.status} — {url}")
-        try:
-            return resp.json()
-        except Exception as e:  # noqa: BLE001
-            raise NaverApiError(f"JSON 파싱 실패: {e}") from e
+
+        for attempt in range(retries + 1):
+            try:
+                resp = self._ctx.request.get(
+                    url,
+                    headers={
+                        "authorization": self._token,
+                        "referer": referer,
+                        "accept": "application/json, text/plain, */*",
+                        "accept-language": "ko-KR,ko;q=0.9",
+                    },
+                    timeout=self.nav_timeout,
+                )
+            except PlaywrightError as e:
+                if attempt < retries:
+                    backoff = 2.0 * (attempt + 1)
+                    log.warning(
+                        "fetch_json 네트워크 오류 — %.0fs 후 재시도(%d/%d): %s",
+                        backoff,
+                        attempt + 1,
+                        retries,
+                        e,
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise NaverApiError(f"네트워크 오류({retries}회 재시도 후 실패): {e}") from e
+
+            if resp.status != 200:
+                raise NaverApiError(f"HTTP {resp.status} — {url}")
+            try:
+                return resp.json()
+            except Exception as e:  # noqa: BLE001
+                raise NaverApiError(f"JSON 파싱 실패: {e}") from e
+
+        raise NaverApiError("네트워크 오류 — 재시도 소진")  # 도달 불가(방어용)
