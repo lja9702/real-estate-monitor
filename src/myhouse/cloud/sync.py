@@ -56,7 +56,8 @@ def push_db(settings: Settings, db_path: str | Path, *, client: S3Client | None 
     if client is None:
         raise RuntimeError("R2 설정이 없습니다(R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET)")
     data = consistent_snapshot_bytes(db_path)
-    return client.put(settings.r2_bucket, settings.r2_db_key, data)
+    # 수십 MB 업로드라 write 타임아웃을 넉넉히(기본 60s 로는 느린 업링크에서 WriteTimeout).
+    return client.put(settings.r2_bucket, settings.r2_db_key, data, timeout=300.0)
 
 
 def pull_db(

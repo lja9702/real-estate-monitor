@@ -108,7 +108,14 @@ class S3Client:
         self.timeout = timeout
 
     def _request(
-        self, method: str, bucket: str, key: str, body: bytes = b"", extra_headers=None
+        self,
+        method: str,
+        bucket: str,
+        key: str,
+        body: bytes = b"",
+        extra_headers=None,
+        *,
+        timeout: float | None = None,
     ) -> httpx.Response:
         path = f"/{bucket}/{key}"
         headers, _ = sign_v4(
@@ -122,10 +129,21 @@ class S3Client:
             extra_headers=extra_headers,
         )
         url = f"{self.endpoint}{_encode_path(path)}"
-        return httpx.request(method, url, headers=headers, content=body, timeout=self.timeout)
+        # connect 은 짧게, read/write 는 넉넉히 — 대용량 DB(수십 MB) 업/다운로드가
+        # 단일 60s 안에 못 끝나면 WriteTimeout 으로 죽던 문제 대비(업로드는 timeout override).
+        t = httpx.Timeout(timeout or self.timeout, connect=10.0)
+        return httpx.request(method, url, headers=headers, content=body, timeout=t)
 
-    def put(self, bucket: str, key: str, body: bytes, content_type="application/octet-stream") -> str | None:
-        r = self._request("PUT", bucket, key, body, {"content-type": content_type})
+    def put(
+        self,
+        bucket: str,
+        key: str,
+        body: bytes,
+        content_type="application/octet-stream",
+        *,
+        timeout: float | None = None,
+    ) -> str | None:
+        r = self._request("PUT", bucket, key, body, {"content-type": content_type}, timeout=timeout)
         r.raise_for_status()
         return r.headers.get("etag")
 

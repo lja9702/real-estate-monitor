@@ -32,6 +32,27 @@ def _html_to_text(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html)
 
 
+def _auto_sync_push(cfg: Config, settings: Settings, status) -> None:
+    """수집 성공(SUCCESS/PARTIAL) 직후 현재 DB 를 R2 로 업로드 — 클라우드(읽기전용)가 ~10분 내 반영.
+
+    R2 미설정이면 no-op. push 가 실패해도 수집 결과엔 영향 없도록 best-effort(로그만).
+    push 자동화가 없던 탓에 클라우드 DB 가 마지막 수동 sync-push 시점에 며칠씩 묶여 있던 문제를 해소.
+    """
+    sval = getattr(status, "value", status)
+    if sval not in ("SUCCESS", "PARTIAL"):
+        return
+    from .cloud.sync import push_db, s3_from_settings
+
+    if s3_from_settings(settings) is None:
+        return  # R2 미설정 — 동기화 비활성
+    try:
+        etag = push_db(settings, cfg.app.db_path)
+        typer.echo(f"☁️  R2 동기화 완료(etag={etag})")
+    except Exception as e:  # noqa: BLE001
+        log.warning("R2 자동 동기화 실패(무시): %s", e)
+        typer.secho(f"⚠️  R2 자동 동기화 실패(무시): {e}", fg="yellow")
+
+
 @app.command()
 def initdb(config: str = typer.Option("config.yaml", help="설정 파일 경로")) -> None:
     """DB 테이블 생성(존재 시 무시)."""
@@ -134,6 +155,7 @@ def collect(
         f"가격변동 {result.price_changed_count} · 거래완료 {result.removed_count} · "
         f"오류 {result.http_errors}"
     )
+    _auto_sync_push(cfg, settings, result.status)
 
 
 @app.command(name="collect-deals")
@@ -205,6 +227,7 @@ def collect_deals(
         f"완료: 상태={result.status.value} · 타겟 {result.targets_count} · "
         f"신규 {result.new_count} · 취소 {result.cancelled_count} · 오류 {result.errors}"
     )
+    _auto_sync_push(cfg, settings, result.status)
 
 
 @app.command(name="collect-permits")
@@ -256,6 +279,7 @@ def collect_permits(
         f"자치구 {result.sgg_count} · 신규 허가 {result.new_count} · "
         f"지번미보유 {result.missing_jibun} · 오류 {result.errors}"
     )
+    _auto_sync_push(cfg, settings, result.status)
 
 
 def _snapshot_engine(db_path: str):
@@ -336,6 +360,8 @@ def collect_auctions(
         f"최저가하락 {result.price_down_count} · 지번미보유 {result.missing_jibun} · "
         f"관할미상 {result.unmatched_court} · 오류 {result.errors}"
     )
+    if not dry_run:  # dry-run 은 실DB 무변경 — 동기화 불필요
+        _auto_sync_push(cfg, settings, result.status)
 
 
 @app.command()

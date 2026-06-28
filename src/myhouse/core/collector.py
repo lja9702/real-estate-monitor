@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import update
@@ -44,6 +44,8 @@ from .targets import ResolvedTarget, resolve_targets
 log = logging.getLogger(__name__)
 
 LOCK_STALE_SECONDS = 3600  # 이보다 오래된 락은 죽은 프로세스로 간주하고 회수
+CONSECUTIVE_FAILURE_LIMIT = 15  # 연속 실패가 이만큼이면 naver 장애/throttle 로 보고 수집 조기중단
+MAX_RUN_DURATION_MIN = 180  # 한 run 의 최대 수행시간(분) — 초과 시 조기중단(락 장기점유로 다음 정기수집을 굶기는 것 방지)
 
 
 class CollectorLocked(RuntimeError):
@@ -480,6 +482,8 @@ def _run_collection(
 
             results: list[ComplexResult] = []
             complexes_done = 0
+            consec_fail = 0
+            deadline = now + timedelta(minutes=MAX_RUN_DURATION_MIN)
             for rt in targets:
                 result = _collect_one(session, rt, run_id, config, client, now)
                 results.append(result)
@@ -490,6 +494,23 @@ def _run_collection(
                     .values(complexes_done=complexes_done)
                 )
                 session.commit()
+                # 조기중단 가드 — naver 장애/throttle 시 한 run 이 락을 무한정 쥐지 않도록.
+                # (없으면 단건 타임아웃 재시도가 누적돼 수십 시간 락 점유 → 다음 정기수집이 launchd 중복실행
+                #  방지로 통째 스킵된다. run #59 가 28h 점유해 6/28 정기수집이 굶은 실사고.)
+                failed = bool(result.error) or (result.fetch is not None and not result.fetch.complete)
+                consec_fail = consec_fail + 1 if failed else 0
+                if consec_fail >= CONSECUTIVE_FAILURE_LIMIT:
+                    log.error(
+                        "연속 %d개 단지 실패 — naver 장애로 보고 수집 조기중단(PARTIAL) · run #%s · %d/%d",
+                        consec_fail, run_id, complexes_done, len(targets),
+                    )
+                    break
+                if now_kst() >= deadline:
+                    log.error(
+                        "수집 %d분 초과 — 락 장기점유 방지 위해 조기중단(PARTIAL) · run #%s · %d/%d",
+                        MAX_RUN_DURATION_MIN, run_id, complexes_done, len(targets),
+                    )
+                    break
 
             new_count = sum(len(r.diff.new) for r in results if r.diff)
             price_changed_count = sum(len(r.diff.price_changed) for r in results if r.diff)
