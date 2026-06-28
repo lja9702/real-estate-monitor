@@ -1,0 +1,34 @@
+# Render Blueprint — myhouse 클라우드(읽기 전용) 서빙.
+# Fly.io 대체. 같은 Dockerfile 을 그대로 쓴다(수집·봇·DB 는 맥, 여기는 R2 에서 받아 ro 서빙).
+# 적용: Render 대시보드 → New → Blueprint → 이 리포 선택. sync:false 비밀은 콘솔에서 1회 입력.
+services:
+  - type: web
+    name: myhouse-dashboard
+    runtime: docker
+    plan: free                 # 512MB / 750시간·월. 15분 유휴 시 sleep → 첫 접속 30~50초 콜드스타트
+    region: singapore          # Render 리전 중 한국에 가장 가까움
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz   # {"ok":true} — 초기 R2 pull 은 백그라운드라 곧장 통과
+    autoDeploy: true            # main 푸시 시 자동 재배포(원치 않으면 false)
+    envVars:
+      # ── 역할/동작 (비밀 아님) ──────────────────────────────────────────
+      - key: CLOUD_READONLY
+        value: "1"             # 읽기 전용: DB ro 오픈 + 모든 쓰기/수집 트리거 403
+      - key: MYHOUSE_CONFIG
+        value: config.yaml
+      - key: SYNC_PULL_INTERVAL_SECONDS
+        value: "600"           # R2 에서 최신 DB 재수신 주기(초)
+      # ── 비밀 (Render 콘솔에서 1회 입력 — 리포에 커밋되지 않음) ──────────
+      - key: TELEGRAM_JOIN_CODE        # 웹·텔레그램 공용 초대코드(게이트 on)
+        sync: false
+      - key: SESSION_SECRET            # 게이트 쿠키 서명 키(랜덤 32B)
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      # (선택) - key: WEB_INVITE_CODES / R2_DB_KEY / NAVER_MAP_CLIENT_ID → 필요 시 추가

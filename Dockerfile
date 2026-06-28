@@ -29,7 +29,7 @@ COPY --from=frontend /app/src/myhouse/web/dist ./src/myhouse/web/dist
 COPY config.yaml ./
 
 EXPOSE 8080
-# Fly/프록시가 X-Forwarded-* 를 붙이므로 --proxy-headers 로 scheme/secure 쿠키를 정확히 인식.
-CMD ["uvicorn", "myhouse.web.app:create_app", "--factory", \
-     "--host", "0.0.0.0", "--port", "8080", \
-     "--proxy-headers", "--forwarded-allow-ips", "*"]
+# 프록시(Fly/Render)가 X-Forwarded-* 를 붙이므로 --proxy-headers 로 scheme/secure 쿠키를 정확히 인식.
+# 포트는 플랫폼이 주입하는 $PORT 우선(Render=10000 등), 없으면 8080(Fly/로컬). exec 로 uvicorn 이
+# PID 1 이 되어 SIGTERM 을 직접 받게 한다(graceful shutdown).
+CMD ["sh", "-c", "exec uvicorn myhouse.web.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips '*'"]

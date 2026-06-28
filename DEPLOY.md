@@ -21,8 +21,10 @@
 ```
 맥(가끔 깸): collect → wal checkpoint → 일관 백업본 → R2 업로드
                                               │
-클라우드(상시, Fly.io): R2 pull(주기) → myhouse.db(ro) → FastAPI /api·SPA → [초대코드 게이트] → 지인
+클라우드(상시, Render): R2 pull(주기) → myhouse.db(ro) → FastAPI /api·SPA → [초대코드 게이트] → 지인
 ```
+
+> **호스트 이력**: 처음엔 Fly.io 로 띄웠으나 무료 체험이 **2 VM-시간/7일**로 매우 짧아(헬스체크가 머신을 계속 깨워 하루 만에 소진) → **Render 무료 티어**(같은 Dockerfile·750시간/월·$0)로 이전했다. Fly 종량제 실비는 월 ~$2 수준이라 비싸진 건 아니지만 "$0 유지"가 목표라 갈아탔다. Fly 런북은 아래 [부록](#부록-flyio-런북-대안)에 남겨둔다. **Vercel 은 부적합**(상시 백그라운드 R2-pull 루프 + 로컬 SQLite 파일이 서버리스와 충돌 — 위 1절 참고).
 
 | | 맥 (수집·운영) | 클라우드 (읽기 전용 서빙) |
 |---|---|---|
@@ -117,10 +119,39 @@ EOF
 .venv/bin/myhouse sync-push        # ✅ 업로드: myhouse-db/myhouse.db (etag=...)
 ```
 
-### C. Fly.io 배포
+### C. Render 배포 (Blueprint)
+리포에 [`render.yaml`](render.yaml) 이 있으니 클릭 몇 번이면 된다(CLI 불필요).
+
+1. [dashboard.render.com](https://dashboard.render.com) 가입(GitHub 로그인) → **New ▾ → Blueprint**.
+2. 이 리포 선택 → Render 가 `render.yaml` 을 읽어 `myhouse-dashboard`(Docker·free·Singapore) 를 생성.
+3. **Apply** 누르면 `sync:false` 비밀값 입력을 요구한다. 다음을 채운다(초대코드는 텔레그램과 같은 값 권장):
+   - `TELEGRAM_JOIN_CODE` = `우리집2026`
+   - `SESSION_SECRET` = `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'` 결과
+   - `R2_ACCOUNT_ID` · `R2_ACCESS_KEY_ID` · `R2_SECRET_ACCESS_KEY` · `R2_BUCKET`
+4. 첫 빌드(원격 Docker 빌드) 후 `https://myhouse-dashboard.onrender.com` 발급. (Blueprint 없이 하려면 **New → Web Service → 리포 → Docker** 로 잡고 위 env 를 수동 입력해도 동일.)
+
+> **무료 티어 특성**: 15분 무접속 시 sleep → 다음 접속 때 **30~50초 콜드스타트**(이후 빠름). 데이터가 하루 1회 갱신·지인 소수 용도라 무방. sleep 중엔 백그라운드 R2-pull 도 멈추지만, 깰 때 기동 pull 로 최신 DB 를 다시 받는다.
+
+### D. 스모크 체크
+- `curl -sf https://myhouse-dashboard.onrender.com/healthz` → `{"ok":true}` (첫 호출은 콜드스타트로 수십 초 지연 가능)
+- 브라우저로 접속 → 초대코드 입력 → 대시보드(읽기 전용). `지금 수집` 등은 403(읽기 전용).
+
+### E. 지속 동기화(데이터 신선도)
+맥에서 새로 수집할 때마다 `sync-push` 가 돌면 클라우드가 600초 안에 반영한다. 가장 간단한 방법:
+- 임시: 수집 후 수동 `myhouse sync-push`.
+- 권장(후속): launchd 수집기들(`com.myhouse.collector` 등) 성공 직후 `sync-push` 가 돌도록 래핑하거나, 각 `collect*` 끝에 자동 push 훅 추가.
+
+> **첫 배포 순서 주의**: R2 가 비어 있으면 클라우드가 DB 를 못 받아 데이터가 안 보인다(헬스체크는 OK). 반드시 **B(시드 push) → C(배포)** 순서로.
+
+---
+
+## 부록: Fly.io 런북 (대안)
+
+처음 쓰던 호스트. 무료 체험이 짧아 Render 로 이전했지만, 종량제 실비(이 워크로드 기준 월 ~$2)를 감수하면 그대로 쓸 수 있다. [`fly.toml`](fly.toml) 이 리포에 남아 있다(같은 Dockerfile 사용). A·B(R2 시드)는 위와 동일.
+
 ```bash
-brew install flyctl && fly auth signup   # 또는 fly auth login
-fly launch --no-deploy                    # fly.toml 인식 — app 이름/리전 확인(빌드는 Fly 원격)
+brew install flyctl && fly auth signup    # 또는 fly auth login (+ 카드 등록 — 체험 후 종량제)
+fly launch --no-deploy                     # fly.toml 인식 — app 이름/리전 확인(빌드는 Fly 원격)
 
 # 비밀 주입(이미지엔 비밀 없음). 초대코드는 텔레그램과 같은 값 권장.
 fly secrets set \
@@ -132,16 +163,7 @@ fly secrets set \
   R2_BUCKET='myhouse-db'
 
 fly deploy
-fly open                                   # https://<app>.fly.dev → 초대코드 페이지
+fly open                                    # https://<app>.fly.dev → 초대코드 페이지
 ```
 
-### D. 스모크 체크
-- `curl -sf https://<app>.fly.dev/healthz` → `{"ok":true}`
-- 브라우저로 접속 → 초대코드 입력 → 대시보드(읽기 전용). `지금 수집` 등은 403(읽기 전용).
-
-### E. 지속 동기화(데이터 신선도)
-맥에서 새로 수집할 때마다 `sync-push` 가 돌면 클라우드가 600초 안에 반영한다. 가장 간단한 방법:
-- 임시: 수집 후 수동 `myhouse sync-push`.
-- 권장(후속): launchd 수집기들(`com.myhouse.collector` 등) 성공 직후 `sync-push` 가 돌도록 래핑하거나, 각 `collect*` 끝에 자동 push 훅 추가.
-
-> **첫 배포 순서 주의**: R2 가 비어 있으면 클라우드가 DB 를 못 받아 데이터가 안 보인다(헬스체크는 OK). 반드시 **B(시드 push) → C(배포)** 순서로.
+> **비용 주의**: Fly 신규 무료는 **2 VM-시간 또는 7일** 체험뿐이다. `fly.toml` 의 30초 헬스체크가 머신을 계속 깨워 체험이 하루 만에 소진될 수 있다. 종량제로 넘어간 뒤엔 scale-to-zero(`min_machines_running=0`·`auto_stop='suspend'`)로 유휴 비용을 줄인다.
